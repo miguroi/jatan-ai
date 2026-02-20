@@ -49,3 +49,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+*.jpg
+*.pdf
+test.py
