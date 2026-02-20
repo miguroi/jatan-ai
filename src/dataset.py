@@ -70,7 +70,7 @@ class BridgeDataset(Dataset):
 
         return {
             "image": img_tensor,
-            "domain": "bridge",
+            "domain": torch.tensor(1, dtype=torch.long),
             "damage": damage,
         }
 
@@ -135,7 +135,7 @@ class RoadDataset(Dataset):
 
         return {
             "image": img_tensor,
-            "domain": "road",
+            "domain": torch.tensor(0, dtype=torch.long),
             "damage": damage,
         }
 

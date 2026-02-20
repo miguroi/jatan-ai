@@ -152,23 +152,23 @@ class Trainer:
         pbar = tqdm(loader, desc="Training", leave=False)
         for batch in pbar:
             images = batch["image"].to(self.device)
-            domains = list(batch["domain"])
+            domains = batch["domain"]
             damage_tgt = batch["damage"].to(self.device)
 
             optimizer.zero_grad()
 
-            bridge_idx = [i for i, d in enumerate(domains) if d == "bridge"]
-            road_idx = [i for i, d in enumerate(domains) if d == "road"]
+            bridge_idx = (domains == 1).nonzero(as_tuple=True)[0]
+            road_idx = (domains == 0).nonzero(as_tuple=True)[0]
 
             loss = torch.tensor(0.0, device=self.device)
 
-            if bridge_idx:
+            if len(bridge_idx) > 0:
                 bridge_imgs = images[bridge_idx]
                 bridge_tgt = damage_tgt[bridge_idx]
                 bridge_logits = self.model(bridge_imgs, "bridge")
                 loss = loss + self._bce(bridge_logits, bridge_tgt)
 
-            if road_idx:
+            if len(road_idx) > 0:
                 road_imgs = images[road_idx]
                 road_tgt = damage_tgt[road_idx]
                 road_logits = self.model(road_imgs, "road")
@@ -198,15 +198,15 @@ class Trainer:
         with torch.no_grad():
             for batch in pbar:
                 images = batch["image"].to(self.device)
-                domains = list(batch["domain"])
+                domains = batch["domain"]
                 damage_tgt = batch["damage"].to(self.device)
 
-                bridge_idx = [i for i, d in enumerate(domains) if d == "bridge"]
-                road_idx = [i for i, d in enumerate(domains) if d == "road"]
+                bridge_idx = (domains == 1).nonzero(as_tuple=True)[0]
+                road_idx = (domains == 0).nonzero(as_tuple=True)[0]
 
                 loss = torch.tensor(0.0, device=self.device)
 
-                if bridge_idx:
+                if len(bridge_idx) > 0:
                     bridge_imgs = images[bridge_idx]
                     bridge_tgt = damage_tgt[bridge_idx]
                     bridge_logits = self.model(bridge_imgs, "bridge")
@@ -215,7 +215,7 @@ class Trainer:
                     bridge_preds.append(bridge_pred.cpu().numpy())
                     bridge_tgts.append(bridge_tgt.cpu().numpy())
 
-                if road_idx:
+                if len(road_idx) > 0:
                     road_imgs = images[road_idx]
                     road_tgt = damage_tgt[road_idx]
                     road_logits = self.model(road_imgs, "road")
