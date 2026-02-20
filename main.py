@@ -114,7 +114,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
     model = JatanMTL().to(device)
 
     ckpt = torch.load(args.checkpoint, map_location=device)
-    model.load_state_dict(ckpt["model_state_dict"])
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
     logger.info("Loaded checkpoint from {}", args.checkpoint)
 
     model.eval()
