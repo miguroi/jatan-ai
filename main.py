@@ -5,6 +5,7 @@ import os
 from bikit.utils import download_dataset
 from loguru import logger
 
+
 def cmd_download(args: argparse.Namespace) -> None:
     """Download dacl1k (bridge) and RDD2022 (road) datasets."""
     data_root: str = args.data_root
@@ -90,8 +91,6 @@ def cmd_eval(args: argparse.Namespace) -> None:
     trainer = Trainer(model, device, data_root=args.data_root)
     metrics = trainer.validate(val_loader)
 
-    from src.dataset import _BRIDGE_CLASSES, _ROAD_CLASSES
-
     logger.info(
         "Evaluation Results\n"
         "  val_loss:         {:.4f}\n"
@@ -104,7 +103,76 @@ def cmd_eval(args: argparse.Namespace) -> None:
 
 
 def cmd_infer(args: argparse.Namespace) -> None:
-    logger.warning("Inference not yet implemented.")
+    import torch
+    from PIL import Image
+    from torchvision import transforms
+
+    from src.dataset import EIDSEG_CLASSES, _BRIDGE_CLASSES, _ROAD_CLASSES
+    from src.model import JatanMTL
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = JatanMTL().to(device)
+
+    ckpt = torch.load(args.checkpoint, map_location=device)
+    model.load_state_dict(ckpt["model_state_dict"])
+    logger.info("Loaded checkpoint from {}", args.checkpoint)
+
+    model.eval()
+
+    img = Image.open(args.image_path).convert("RGB")
+
+    # Classification
+    cls_tfm = transforms.Compose([
+        transforms.Resize((384, 384)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    x_cls = cls_tfm(img).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        logits = model(x_cls, args.domain)
+        probs = torch.sigmoid(logits)[0].cpu().tolist()
+
+    classes = _BRIDGE_CLASSES if args.domain == "bridge" else _ROAD_CLASSES
+    print(f"\nDamage classification ({args.domain}) — {args.image_path}")
+    print(f"{'Class':<20} {'Prob':>6}  {'Detected':>8}")
+    print("-" * 38)
+    for cls_name, prob in zip(classes, probs):
+        detected = "YES" if prob >= args.threshold else "no"
+        print(f"{cls_name:<20} {prob:>6.3f}  {detected:>8}")
+
+    # Segmentation
+    seg_tfm = transforms.Compose([
+        transforms.Resize((640, 640)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    x_seg = seg_tfm(img).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        out = model.segment(x_seg)
+
+    import numpy as np
+    seg_map = out["seg_map"][0].cpu().numpy()
+    severity_score = float(out["severity"][0].cpu())
+    total_pixels = seg_map.size
+
+    print(f"\nSegmentation results")
+    print(f"{'Class':<25} {'Pixels':>8}  {'%':>6}")
+    print("-" * 44)
+    for cls_idx, cls_name in enumerate(EIDSEG_CLASSES):
+        count = int((seg_map == cls_idx).sum())
+        pct = count / total_pixels * 100
+        print(f"{cls_name:<25} {count:>8}  {pct:>5.2f}%")
+
+    if severity_score < 0.2:
+        severity_label = "Ringan"
+    elif severity_score < 0.5:
+        severity_label = "Sedang"
+    else:
+        severity_label = "Berat"
+
+    print(f"\nSeverity score: {severity_score:.4f}  ({severity_label})")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -148,9 +216,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # infer
     p_in = sub.add_parser("infer", help="Run inference on a single image")
-    p_in.add_argument("image_path")
+    p_in.add_argument("image_path", help="Path to the input image")
+    p_in.add_argument(
+        "--domain",
+        choices=["bridge", "road"],
+        default="bridge",
+        help="Domain for damage classification (default: bridge)",
+    )
     p_in.add_argument("--checkpoint", default="checkpoints/best_model.pt")
-    p_in.add_argument("--threshold",  type=float, default=0.5)
+    p_in.add_argument("--threshold",  type=float, default=0.5,
+                      help="Sigmoid threshold for classification (default: 0.5)")
     p_in.set_defaults(func=cmd_infer)
 
     return parser

@@ -18,6 +18,15 @@ _N_BRIDGE = len(_BRIDGE_CLASSES)
 _ROAD_CLASSES = ["D00", "D10", "D20", "D40", "NoDefect"]
 _N_ROAD = len(_ROAD_CLASSES)
 
+EIDSEG_CLASSES = [
+    "Undamaged Building",
+    "Damaged Building",
+    "Destroyed Building",
+    "Undamaged Road",
+    "Damaged Road",
+    "Background",
+]
+
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
 

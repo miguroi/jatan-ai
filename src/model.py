@@ -1,6 +1,14 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.models import ResNet50_Weights, resnet50
+
+_SEG_CHECKPOINT = "checkpoints/segformer_best_model.pth"
+_SEG_PRETRAINED = "nvidia/segformer-b5-finetuned-ade-640-640"
+_DEPTH_PRETRAINED = "Intel/dpt-large"
+_N_SEG_CLASSES = 6
+
+_DS_WEIGHT = 0.65
 
 
 class JatanMTL(nn.Module):
@@ -8,9 +16,11 @@ class JatanMTL(nn.Module):
 
     Uses separate task heads for bridge (dacl1k) and road (RDD2022) damage types.
     Shared backbone learns general damage features across domains.
+    A frozen SegFormer-B5 + frozen DPT provide depth-weighted damage severity
+    segmentation for any input image (paper Eq. 1).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, seg_checkpoint: str = _SEG_CHECKPOINT) -> None:
         super().__init__()
 
         base = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
@@ -36,16 +46,73 @@ class JatanMTL(nn.Module):
             nn.Linear(512, 5),
         )
 
-    def forward(
-        self, x: torch.Tensor, domain: str
-    ) -> torch.Tensor:
+        self.seg_model = self._load_seg_model(seg_checkpoint)
+        self.freeze_seg_model()
+
+        self.depth_model = self._load_depth_model()
+        self.freeze_depth_model()
+
+    @staticmethod
+    def _load_seg_model(checkpoint_path: str):
+        from transformers import SegformerForSemanticSegmentation
+
+        seg = SegformerForSemanticSegmentation.from_pretrained(
+            _SEG_PRETRAINED,
+            num_labels=_N_SEG_CLASSES,
+            ignore_mismatched_sizes=True,
+        )
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        if isinstance(ckpt, dict):
+            state_dict = ckpt.get("model", ckpt.get("state_dict", ckpt))
+        else:
+            state_dict = ckpt
+        clean_sd = {
+            (k[len("model."):] if k.startswith("model.") else k): v
+            for k, v in state_dict.items()
+        }
+        seg.load_state_dict(clean_sd, strict=False)
+        return seg
+
+    @staticmethod
+    def _load_depth_model():
+        from transformers import DPTForDepthEstimation
+
+        return DPTForDepthEstimation.from_pretrained(_DEPTH_PRETRAINED)
+
+
+    def freeze_backbone(self) -> None:
+        for p in self.backbone.parameters():
+            p.requires_grad = False
+
+    def unfreeze_backbone(self) -> None:
+        for p in self.backbone.parameters():
+            p.requires_grad = True
+
+    def freeze_seg_model(self) -> None:
+        for p in self.seg_model.parameters():
+            p.requires_grad = False
+
+    def unfreeze_seg_model(self) -> None:
+        for p in self.seg_model.parameters():
+            p.requires_grad = True
+
+    def freeze_depth_model(self) -> None:
+        for p in self.depth_model.parameters():
+            p.requires_grad = False
+
+    def unfreeze_depth_model(self) -> None:
+        for p in self.depth_model.parameters():
+            p.requires_grad = True
+
+
+    def forward(self, x: torch.Tensor, domain: str) -> torch.Tensor:
         """
         Args:
             x: [B, 3, 384, 384]
-            domain: "bridge" or "road" - which head to use
+            domain: "bridge" or "road"
 
         Returns:
-            damage_logits [B, 4] for bridge or [B, 7] for road
+            damage logits [B, 6] for bridge or [B, 5] for road
         """
         feats = self.backbone(x)
         feats = feats.flatten(1)
@@ -58,10 +125,69 @@ class JatanMTL(nn.Module):
         else:
             raise ValueError(f"Invalid domain: {domain}. Must be 'bridge' or 'road'")
 
-    def freeze_backbone(self) -> None:
-        for p in self.backbone.parameters():
-            p.requires_grad = False
 
-    def unfreeze_backbone(self) -> None:
-        for p in self.backbone.parameters():
-            p.requires_grad = True
+    def segment(self, x: torch.Tensor) -> dict:
+        """Run SegFormer + DPT on any image and compute paper Eq. 1 severity.
+
+        Args:
+            x: [B, 3, H, W]
+
+        Returns:
+            seg_logits: [B, 6, 640, 640]
+            seg_map:    [B, 640, 640]  integer class indices 0–5
+            depth_map:  [B, 640, 640]  normalised to [0.1, 1.0]
+            severity:   [B]            damage severity score
+        """
+        x_resized = F.interpolate(x, size=(640, 640), mode="bilinear", align_corners=False)
+
+        seg_out = self.seg_model(pixel_values=x_resized)
+        seg_logits = F.interpolate(
+            seg_out.logits, size=(640, 640), mode="bilinear", align_corners=False
+        )
+        seg_map = seg_logits.argmax(dim=1)
+
+        depth_out = self.depth_model(pixel_values=x_resized)
+        depth_map = F.interpolate(
+            depth_out.predicted_depth.unsqueeze(1),
+            size=(640, 640), mode="bilinear", align_corners=False,
+        ).squeeze(1)
+        depth_map = self._normalize_depth(depth_map)
+
+        return {
+            "seg_logits": seg_logits,
+            "seg_map": seg_map,
+            "depth_map": depth_map,
+            "severity": self.compute_severity(seg_map, depth_map),
+        }
+
+    @staticmethod
+    def _normalize_depth(depth: torch.Tensor) -> torch.Tensor:
+        """Normalise depth per image to [0.1, 1.0] (far pixels → higher weight)."""
+        B = depth.shape[0]
+        flat = depth.view(B, -1)
+        d_min = flat.min(dim=1).values.view(B, 1, 1)
+        d_max = flat.max(dim=1).values.view(B, 1, 1)
+        return 0.1 + (depth - d_min) / (d_max - d_min + 1e-8) * 0.9
+
+    @staticmethod
+    def compute_severity(seg_map: torch.Tensor, depth_map: torch.Tensor) -> torch.Tensor:
+        """depth-weighted damage severity score.
+
+        score = (DS_weight × Σ DS×Depth  +  Σ Debris×Depth)
+                / (Σ DS×Depth  +  Σ Debris×Depth  +  Σ US×Depth)
+
+        US     = classes 0 (Undamaged Building), 3 (Undamaged Road)
+        DS     = classes 1 (Damaged Building),   4 (Damaged Road)    weight=0.65
+        Debris = class  2 (Destroyed Building)
+
+        Background (class 5) excluded from all terms.
+        """
+        us_depth     = ((seg_map == 0) | (seg_map == 3)).float() * depth_map
+        ds_depth     = ((seg_map == 1) | (seg_map == 4)).float() * depth_map
+        debris_depth = (seg_map == 2).float()                    * depth_map
+
+        us     = us_depth.sum(dim=(1, 2))
+        ds     = ds_depth.sum(dim=(1, 2))
+        debris = debris_depth.sum(dim=(1, 2))
+
+        return (_DS_WEIGHT * ds + debris) / (ds + debris + us).clamp(min=1e-8)
