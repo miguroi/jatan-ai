@@ -15,6 +15,13 @@ from tqdm import tqdm
 from src.dataset import CombinedDamageDataset, get_transform
 
 
+def custom_collate_fn(batch):
+    images = torch.stack([item["image"] for item in batch])
+    domains = torch.stack([item["domain"] for item in batch])
+    damages = [item["damage"] for item in batch]
+    return {"image": images, "domain": domains, "damage": damages}
+
+
 class Trainer:
     def __init__(
         self,
@@ -92,6 +99,7 @@ class Trainer:
             sampler=train_ds.get_sampler(),
             num_workers=self.num_workers,
             pin_memory=True,
+            collate_fn=custom_collate_fn,
         )
         self._val_loader = DataLoader(
             val_ds,
@@ -99,6 +107,7 @@ class Trainer:
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=True,
+            collate_fn=custom_collate_fn,
         )
 
     def _phase(self, phase_name: str, epochs: int, optimizer: torch.optim.Optimizer) -> None:
@@ -153,7 +162,7 @@ class Trainer:
         for batch in pbar:
             images = batch["image"].to(self.device)
             domains = batch["domain"]
-            damage_tgt = batch["damage"].to(self.device)
+            damages = batch["damage"]
 
             optimizer.zero_grad()
 
@@ -164,13 +173,13 @@ class Trainer:
 
             if len(bridge_idx) > 0:
                 bridge_imgs = images[bridge_idx]
-                bridge_tgt = damage_tgt[bridge_idx]
+                bridge_tgt = torch.stack([damages[i] for i in bridge_idx]).to(self.device)
                 bridge_logits = self.model(bridge_imgs, "bridge")
                 loss = loss + self._bce(bridge_logits, bridge_tgt)
 
             if len(road_idx) > 0:
                 road_imgs = images[road_idx]
-                road_tgt = damage_tgt[road_idx]
+                road_tgt = torch.stack([damages[i] for i in road_idx]).to(self.device)
                 road_logits = self.model(road_imgs, "road")
                 loss = loss + self._bce(road_logits, road_tgt)
 
@@ -199,7 +208,7 @@ class Trainer:
             for batch in pbar:
                 images = batch["image"].to(self.device)
                 domains = batch["domain"]
-                damage_tgt = batch["damage"].to(self.device)
+                damages = batch["damage"]
 
                 bridge_idx = (domains == 1).nonzero(as_tuple=True)[0]
                 road_idx = (domains == 0).nonzero(as_tuple=True)[0]
@@ -208,7 +217,7 @@ class Trainer:
 
                 if len(bridge_idx) > 0:
                     bridge_imgs = images[bridge_idx]
-                    bridge_tgt = damage_tgt[bridge_idx]
+                    bridge_tgt = torch.stack([damages[i] for i in bridge_idx]).to(self.device)
                     bridge_logits = self.model(bridge_imgs, "bridge")
                     loss = loss + self._bce(bridge_logits, bridge_tgt)
                     bridge_pred = (torch.sigmoid(bridge_logits) >= 0.5).float()
@@ -217,7 +226,7 @@ class Trainer:
 
                 if len(road_idx) > 0:
                     road_imgs = images[road_idx]
-                    road_tgt = damage_tgt[road_idx]
+                    road_tgt = torch.stack([damages[i] for i in road_idx]).to(self.device)
                     road_logits = self.model(road_imgs, "road")
                     loss = loss + self._bce(road_logits, road_tgt)
                     road_pred = (torch.sigmoid(road_logits) >= 0.5).float()

@@ -79,9 +79,12 @@ def cmd_eval(args: argparse.Namespace) -> None:
         split="val", data_root=args.data_root, transform=get_transform("val")
     )
     num_workers = min(4, os.cpu_count() or 1)
+
+    from src.trainer import custom_collate_fn
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
+        collate_fn=custom_collate_fn,
     )
 
     trainer = Trainer(model, device, data_root=args.data_root)
