@@ -1,0 +1,20 @@
+[project]
+name = "jatan-ai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "albumentations>=2.0.8",
+    "building-inspection-toolkit",
+    "dataset-tools",
+    "kaggle>=1.6",
+    "loguru>=0.7",
+    "pandas",
+    "scikit-learn",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+]
+
+[tool.uv.sources]
+building-inspection-toolkit = { git = "https://github.com/phiyodr/building-inspection-toolkit.git" }
