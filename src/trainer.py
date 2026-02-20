@@ -10,6 +10,7 @@ from loguru import logger
 from sklearn.metrics import f1_score, hamming_loss
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from src.dataset import CombinedDamageDataset, get_transform
 
@@ -170,7 +171,8 @@ class Trainer:
         running_loss = 0.0
         n_batches = 0
 
-        for batch in loader:
+        pbar = tqdm(loader, desc="Training", leave=False)
+        for batch in pbar:
             images     = batch["image"].to(self.device)
             asset_tgt  = batch["asset_type"].to(self.device)
             damage_tgt = batch["damage_types"].to(self.device)
@@ -192,6 +194,8 @@ class Trainer:
             running_loss += loss.item()
             n_batches += 1
 
+            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+
         return {"train_loss": running_loss / max(n_batches, 1)}
 
     def validate(self, loader: DataLoader) -> dict:
@@ -204,8 +208,9 @@ class Trainer:
         all_damage_preds: list[np.ndarray] = []
         all_damage_tgts:  list[np.ndarray] = []
 
+        pbar = tqdm(loader, desc="Validating", leave=False)
         with torch.no_grad():
-            for batch in loader:
+            for batch in pbar:
                 images     = batch["image"].to(self.device)
                 asset_tgt  = batch["asset_type"].to(self.device)
                 damage_tgt = batch["damage_types"].to(self.device)
@@ -218,6 +223,8 @@ class Trainer:
 
                 running_loss += loss.item()
                 n_batches += 1
+
+                pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
                 asset_pred  = (torch.sigmoid(asset_logits) >= 0.5).long().squeeze(1)
                 damage_pred = (torch.sigmoid(damage_logits) >= 0.5).float()
