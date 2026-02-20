@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Optional
 
@@ -100,26 +99,32 @@ class RoadDataset(Dataset):
     def __len__(self) -> int:
         return len(self._samples)
 
-    def _parse_annotation(self, xml_path: Path) -> np.ndarray:
+    def _parse_annotation(self, txt_path: Path) -> np.ndarray:
         damage = np.zeros(_N_ROAD, dtype=np.float32)
 
-        if not xml_path.exists():
+        if not txt_path.exists():
             damage[_ROAD_CLASSES.index("NoDefect")] = 1.0
             return damage
 
-        root = ET.parse(xml_path).getroot()
-        objects = root.findall("object")
+        with open(txt_path) as f:
+            lines = f.read().strip().splitlines()
 
-        if not objects:
+        if not lines:
             damage[_ROAD_CLASSES.index("NoDefect")] = 1.0
             return damage
 
-        for obj in objects:
-            name_el = obj.find("name")
-            if name_el is not None:
-                code = name_el.text.strip()
-                if code in _ROAD_CLASSES:
-                    damage[_ROAD_CLASSES.index(code)] = 1.0
+        yolo_to_road = {0: "D00", 1: "D10", 2: "D20", 3: "D40"}
+        for line in lines:
+            parts = line.strip().split()
+            if not parts:
+                continue
+            class_id = int(parts[0])
+            if class_id in yolo_to_road:
+                road_class = yolo_to_road[class_id]
+                damage[_ROAD_CLASSES.index(road_class)] = 1.0
+
+        if damage.sum() == 0:
+            damage[_ROAD_CLASSES.index("NoDefect")] = 1.0
 
         return damage
 
@@ -127,11 +132,11 @@ class RoadDataset(Dataset):
         from PIL import Image
 
         img_path = self._samples[idx]
-        xml_path = self._annots_dir / (img_path.stem + ".xml")
+        txt_path = self._annots_dir / (img_path.stem + ".txt")
 
         img_np = np.array(Image.open(img_path).convert("RGB"))
         img_tensor = self.transform(image=img_np)["image"]
-        damage = torch.from_numpy(self._parse_annotation(xml_path))
+        damage = torch.from_numpy(self._parse_annotation(txt_path))
 
         return {
             "image": img_tensor,
