@@ -69,7 +69,6 @@ class Trainer:
             list(self.model.shared_fc.parameters())
             + list(self.model.asset_head.parameters())
             + list(self.model.damage_head.parameters())
-            + [self.model.logsigma]
         )
         optimizer1 = torch.optim.SGD(
             trainable, lr=0.01, momentum=0.9, weight_decay=1e-4
@@ -90,7 +89,6 @@ class Trainer:
                         list(self.model.shared_fc.parameters())
                         + list(self.model.asset_head.parameters())
                         + list(self.model.damage_head.parameters())
-                        + [self.model.logsigma]
                     ),
                     "lr": 1e-3,
                 },
@@ -262,18 +260,7 @@ class Trainer:
         asset_loss: torch.Tensor,
         damage_loss: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Uncertainty-weighted loss (Kendall et al., 2018).
-
-        Automatically balances the 1-term asset loss vs. 7-term damage loss
-        via the learned logsigma parameters.
-        """
-        task_losses = [asset_loss, damage_loss]
-        return sum(
-            1 / (2 * torch.exp(self.model.logsigma[i])) * task_losses[i]
-            + self.model.logsigma[i] / 2
-            for i in range(2)
-        )
+        return asset_loss + damage_loss
 
     def _save_checkpoint(
         self,

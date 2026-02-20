@@ -31,9 +31,6 @@ class JatanMTL(nn.Module):
             nn.Linear(512, 7),
         )
 
-        # learnable log-sigma parameters for uncertainty-based loss weighting
-        self.logsigma = nn.Parameter(torch.FloatTensor([-0.5, -0.5]))
-
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
