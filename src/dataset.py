@@ -156,8 +156,8 @@ class RoadDataset(Dataset):
         if split not in ("train", "val"):
             raise ValueError(f"RoadDataset split must be 'train' or 'val', got '{split}'")
         rdd_split = split
-        self._images_dir = Path(data_root) / "rdd2022" / rdd_split / "images"
-        self._annots_dir = Path(data_root) / "rdd2022" / rdd_split / "annotations"
+        self._images_dir = Path(data_root) / "rdd2022" / "RDD_SPLIT" / rdd_split / "images"
+        self._annots_dir = Path(data_root) / "rdd2022" / "RDD_SPLIT" / rdd_split / "annotations"
 
         self._samples: List[Path] = sorted(self._images_dir.glob("*.jpg"))
         if not self._samples:
