@@ -171,23 +171,20 @@ class JatanMTL(nn.Module):
 
     @staticmethod
     def compute_severity(seg_map: torch.Tensor, depth_map: torch.Tensor) -> torch.Tensor:
-        """depth-weighted damage severity score.
+        """Depth-weighted road damage severity score.
 
-        score = (DS_weight × Σ DS×Depth  +  Σ Debris×Depth)
-                / (Σ DS×Depth  +  Σ Debris×Depth  +  Σ US×Depth)
+        score = (DS_weight × Σ Damaged_Road×Depth)
+                / (Σ Damaged_Road×Depth  +  Σ Undamaged_Road×Depth  +  Σ Background×Depth)
 
-        US     = classes 0 (Undamaged Building), 3 (Undamaged Road)
-        DS     = classes 1 (Damaged Building),   4 (Damaged Road)    weight=0.65
-        Debris = class  2 (Destroyed Building)
-
-        Background (class 5) excluded from all terms.
+        Building classes (0, 1, 2) are excluded — road-only assessment.
+        Background (class 5) acts as the undamaged reference in the denominator.
         """
-        us_depth     = ((seg_map == 0) | (seg_map == 3)).float() * depth_map
-        ds_depth     = ((seg_map == 1) | (seg_map == 4)).float() * depth_map
-        debris_depth = (seg_map == 2).float()                    * depth_map
+        damaged_road   = (seg_map == 4).float() * depth_map
+        undamaged_road = (seg_map == 3).float() * depth_map
+        background     = (seg_map == 5).float() * depth_map
 
-        us     = us_depth.sum(dim=(1, 2))
-        ds     = ds_depth.sum(dim=(1, 2))
-        debris = debris_depth.sum(dim=(1, 2))
+        ds  = damaged_road.sum(dim=(1, 2))
+        us  = undamaged_road.sum(dim=(1, 2))
+        bg  = background.sum(dim=(1, 2))
 
-        return (_DS_WEIGHT * ds + debris) / (ds + debris + us).clamp(min=1e-8)
+        return (_DS_WEIGHT * ds) / (ds + us + bg).clamp(min=1e-8)
