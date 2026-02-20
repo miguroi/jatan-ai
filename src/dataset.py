@@ -88,7 +88,7 @@ class RoadDataset(Dataset):
             raise ValueError(f"RoadDataset split must be 'train' or 'val', got '{split}'")
 
         self._images_dir = Path(data_root) / "rdd2022" / "RDD_SPLIT" / split / "images"
-        self._annots_dir = Path(data_root) / "rdd2022" / "RDD_SPLIT" / split / "annotations"
+        self._annots_dir = Path(data_root) / "rdd2022" / "RDD_SPLIT" / split / "labels"
 
         self._samples: List[Path] = sorted(self._images_dir.glob("*.jpg"))
         if not self._samples:
