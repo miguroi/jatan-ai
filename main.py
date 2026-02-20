@@ -131,8 +131,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_dl.add_argument(
         "--kaggle-dataset",
-        default="tunguz/road-damage-detection-2022",
-        help="Kaggle dataset slug for RDD2022 (default: tunguz/road-damage-detection-2022)",
+        default="aliabdelmenam/rdd-2022",
+        help="Kaggle dataset slug for RDD2022 (default: aliabdelmenam/rdd-2022)",
     )
     p_dl.set_defaults(func=cmd_download)
 
