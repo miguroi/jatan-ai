@@ -16,20 +16,6 @@ from src.dataset import CombinedDamageDataset, get_transform
 
 
 class Trainer:
-    """
-    Orchestrates two-phase MTL training with validation, checkpointing, and
-    early stopping.
-
-    Args:
-        model:          JatanMTL instance.
-        device:         torch.device.
-        data_root:      Root directory for raw data.
-        batch_size:     DataLoader batch size.
-        epochs1:        Epochs for Phase 1 (frozen backbone).
-        epochs2:        Epochs for Phase 2 (full fine-tune).
-        checkpoint_dir: Directory to save checkpoints.
-    """
-
     def __init__(
         self,
         model: nn.Module,
@@ -53,29 +39,24 @@ class Trainer:
         self.num_workers = num_workers
 
         os.makedirs(checkpoint_dir, exist_ok=True)
-
         self._bce = nn.BCEWithLogitsLoss()
-
         self._train_loader: Optional[DataLoader] = None
         self._val_loader: Optional[DataLoader] = None
 
     def run(self) -> None:
-        """Orchestrate Phase 1 → Phase 2."""
         self._build_loaders()
 
-        # --- Phase 1: frozen backbone ---
         self.model.freeze_backbone()
         trainable = (
             list(self.model.shared_fc.parameters())
-            + list(self.model.asset_head.parameters())
-            + list(self.model.damage_head.parameters())
+            + list(self.model.bridge_head.parameters())
+            + list(self.model.road_head.parameters())
         )
         optimizer1 = torch.optim.SGD(
             trainable, lr=0.01, momentum=0.9, weight_decay=1e-4
         )
         self._phase("phase1", self.epochs1, optimizer1)
 
-        # --- Phase 2: full fine-tune ---
         phase1_ckpt = os.path.join(self.checkpoint_dir, "phase1_best.pt")
         ckpt = torch.load(phase1_ckpt, map_location=self.device)
         self.model.load_state_dict(ckpt["model_state_dict"])
@@ -87,8 +68,8 @@ class Trainer:
                 {
                     "params": (
                         list(self.model.shared_fc.parameters())
-                        + list(self.model.asset_head.parameters())
-                        + list(self.model.damage_head.parameters())
+                        + list(self.model.bridge_head.parameters())
+                        + list(self.model.road_head.parameters())
                     ),
                     "lr": 1e-3,
                 },
@@ -121,7 +102,6 @@ class Trainer:
         )
 
     def _phase(self, phase_name: str, epochs: int, optimizer: torch.optim.Optimizer) -> None:
-        """Run a full training phase with validation and checkpointing."""
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
         best_val_loss = float("inf")
         patience_counter = 0
@@ -135,17 +115,17 @@ class Trainer:
             logger.info("[{}] Epoch {}/{}", phase_name, epoch + 1, epochs)
 
             train_metrics = self._train_epoch(self._train_loader, optimizer)
-            val_metrics   = self.validate(self._val_loader)
+            val_metrics = self.validate(self._val_loader)
 
             scheduler.step()
 
             val_loss = val_metrics["val_loss"]
             logger.info(
-                "train_loss={:.4f} val_loss={:.4f} asset_acc={:.4f} damage_macro_f1={:.4f}",
+                "train_loss={:.4f} val_loss={:.4f} bridge_f1={:.4f} road_f1={:.4f}",
                 train_metrics["train_loss"],
                 val_loss,
-                val_metrics["asset_acc"],
-                val_metrics["damage_macro_f1"],
+                val_metrics["bridge_macro_f1"],
+                val_metrics["road_macro_f1"],
             )
 
             if val_loss < best_val_loss:
@@ -171,27 +151,35 @@ class Trainer:
 
         pbar = tqdm(loader, desc="Training", leave=False)
         for batch in pbar:
-            images     = batch["image"].to(self.device)
-            asset_tgt  = batch["asset_type"].to(self.device)
-            damage_tgt = batch["damage_types"].to(self.device)
+            images = batch["image"].to(self.device)
+            domains = list(batch["domain"])
+            damage_tgt = batch["damage"].to(self.device)
 
             optimizer.zero_grad()
 
-            asset_logits, damage_logits = self.model(images)
+            bridge_idx = [i for i, d in enumerate(domains) if d == "bridge"]
+            road_idx = [i for i, d in enumerate(domains) if d == "road"]
 
-            asset_loss  = self._bce(asset_logits, asset_tgt.unsqueeze(1).float())
-            damage_loss = self._bce(damage_logits, damage_tgt)
+            loss = torch.tensor(0.0, device=self.device)
 
-            loss = self._compute_loss(asset_loss, damage_loss)
+            if bridge_idx:
+                bridge_imgs = images[bridge_idx]
+                bridge_tgt = damage_tgt[bridge_idx]
+                bridge_logits = self.model(bridge_imgs, "bridge")
+                loss = loss + self._bce(bridge_logits, bridge_tgt)
+
+            if road_idx:
+                road_imgs = images[road_idx]
+                road_tgt = damage_tgt[road_idx]
+                road_logits = self.model(road_imgs, "road")
+                loss = loss + self._bce(road_logits, road_tgt)
+
             loss.backward()
-
             nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
             optimizer.step()
 
             running_loss += loss.item()
             n_batches += 1
-
             pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
         return {"train_loss": running_loss / max(n_batches, 1)}
@@ -201,66 +189,63 @@ class Trainer:
         running_loss = 0.0
         n_batches = 0
 
-        all_asset_preds:  list[np.ndarray] = []
-        all_asset_tgts:   list[np.ndarray] = []
-        all_damage_preds: list[np.ndarray] = []
-        all_damage_tgts:  list[np.ndarray] = []
+        bridge_preds = []
+        bridge_tgts = []
+        road_preds = []
+        road_tgts = []
 
         pbar = tqdm(loader, desc="Validating", leave=False)
         with torch.no_grad():
             for batch in pbar:
-                images     = batch["image"].to(self.device)
-                asset_tgt  = batch["asset_type"].to(self.device)
-                damage_tgt = batch["damage_types"].to(self.device)
+                images = batch["image"].to(self.device)
+                domains = list(batch["domain"])
+                damage_tgt = batch["damage"].to(self.device)
 
-                asset_logits, damage_logits = self.model(images)
+                bridge_idx = [i for i, d in enumerate(domains) if d == "bridge"]
+                road_idx = [i for i, d in enumerate(domains) if d == "road"]
 
-                asset_loss  = self._bce(asset_logits, asset_tgt.unsqueeze(1).float())
-                damage_loss = self._bce(damage_logits, damage_tgt)
-                loss = self._compute_loss(asset_loss, damage_loss)
+                loss = torch.tensor(0.0, device=self.device)
+
+                if bridge_idx:
+                    bridge_imgs = images[bridge_idx]
+                    bridge_tgt = damage_tgt[bridge_idx]
+                    bridge_logits = self.model(bridge_imgs, "bridge")
+                    loss = loss + self._bce(bridge_logits, bridge_tgt)
+                    bridge_pred = (torch.sigmoid(bridge_logits) >= 0.5).float()
+                    bridge_preds.append(bridge_pred.cpu().numpy())
+                    bridge_tgts.append(bridge_tgt.cpu().numpy())
+
+                if road_idx:
+                    road_imgs = images[road_idx]
+                    road_tgt = damage_tgt[road_idx]
+                    road_logits = self.model(road_imgs, "road")
+                    loss = loss + self._bce(road_logits, road_tgt)
+                    road_pred = (torch.sigmoid(road_logits) >= 0.5).float()
+                    road_preds.append(road_pred.cpu().numpy())
+                    road_tgts.append(road_tgt.cpu().numpy())
 
                 running_loss += loss.item()
                 n_batches += 1
-
                 pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
-                asset_pred  = (torch.sigmoid(asset_logits) >= 0.5).long().squeeze(1)
-                damage_pred = (torch.sigmoid(damage_logits) >= 0.5).float()
+        bridge_macro_f1 = 0.0
+        road_macro_f1 = 0.0
 
-                all_asset_preds.append(asset_pred.cpu().numpy())
-                all_asset_tgts.append(asset_tgt.cpu().numpy())
-                all_damage_preds.append(damage_pred.cpu().numpy())
-                all_damage_tgts.append(damage_tgt.cpu().numpy())
+        if bridge_preds:
+            bridge_preds = np.concatenate(bridge_preds, axis=0)
+            bridge_tgts = np.concatenate(bridge_tgts, axis=0)
+            bridge_macro_f1 = float(f1_score(bridge_tgts, bridge_preds, average="macro", zero_division=0))
 
-        asset_preds  = np.concatenate(all_asset_preds)
-        asset_tgts   = np.concatenate(all_asset_tgts)
-        damage_preds = np.concatenate(all_damage_preds, axis=0)
-        damage_tgts  = np.concatenate(all_damage_tgts, axis=0)
-
-        asset_acc = float((asset_preds == asset_tgts).mean())
-        asset_f1  = float(f1_score(asset_tgts, asset_preds, average="binary", zero_division=0))
-
-        damage_macro_f1 = float(f1_score(damage_tgts, damage_preds, average="macro", zero_division=0))
-        damage_micro_f1 = float(f1_score(damage_tgts, damage_preds, average="micro", zero_division=0))
-        damage_hamming  = float(hamming_loss(damage_tgts, damage_preds))
-        per_class_f1    = f1_score(damage_tgts, damage_preds, average=None, zero_division=0).tolist()
+        if road_preds:
+            road_preds = np.concatenate(road_preds, axis=0)
+            road_tgts = np.concatenate(road_tgts, axis=0)
+            road_macro_f1 = float(f1_score(road_tgts, road_preds, average="macro", zero_division=0))
 
         return {
-            "val_loss":        running_loss / max(n_batches, 1),
-            "asset_acc":       asset_acc,
-            "asset_f1":        asset_f1,
-            "damage_macro_f1": damage_macro_f1,
-            "damage_micro_f1": damage_micro_f1,
-            "damage_hamming":  damage_hamming,
-            "per_class_f1":    per_class_f1,
+            "val_loss": running_loss / max(n_batches, 1),
+            "bridge_macro_f1": bridge_macro_f1,
+            "road_macro_f1": road_macro_f1,
         }
-
-    def _compute_loss(
-        self,
-        asset_loss: torch.Tensor,
-        damage_loss: torch.Tensor,
-    ) -> torch.Tensor:
-        return asset_loss + damage_loss
 
     def _save_checkpoint(
         self,
@@ -272,20 +257,12 @@ class Trainer:
     ) -> None:
         torch.save(
             {
-                "epoch":                epoch,
-                "model_state_dict":     self.model.state_dict(),
+                "epoch": epoch,
+                "model_state_dict": self.model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
-                "val_loss":             metrics["val_loss"],
-                "metrics":              metrics,
-                "phase":                phase,
+                "val_loss": metrics["val_loss"],
+                "metrics": metrics,
+                "phase": phase,
             },
             path,
         )
-
-    def load_checkpoint(self, path: str, optimizer: torch.optim.Optimizer) -> int:
-        """Load a checkpoint into the model and optimizer. Returns the saved epoch number."""
-        ckpt = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(ckpt["model_state_dict"])
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-        return ckpt["epoch"]
-

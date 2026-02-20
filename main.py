@@ -87,27 +87,16 @@ def cmd_eval(args: argparse.Namespace) -> None:
     trainer = Trainer(model, device, data_root=args.data_root)
     metrics = trainer.validate(val_loader)
 
-    from src.dataset import UNIFIED_CLASSES
-    per_class = "\n".join(
-        f"    {cls:<16} {f1:.4f}"
-        for cls, f1 in zip(UNIFIED_CLASSES, metrics["per_class_f1"])
-    )
+    from src.dataset import _BRIDGE_CLASSES, _ROAD_CLASSES
+
     logger.info(
         "Evaluation Results\n"
-        "  val_loss:        {:.4f}\n"
-        "  asset_acc:       {:.4f}\n"
-        "  asset_f1:        {:.4f}\n"
-        "  damage_macro_f1: {:.4f}\n"
-        "  damage_micro_f1: {:.4f}\n"
-        "  damage_hamming:  {:.4f}\n"
-        "  per_class_f1:\n{}",
+        "  val_loss:         {:.4f}\n"
+        "  bridge_macro_f1:  {:.4f}\n"
+        "  road_macro_f1:    {:.4f}",
         metrics["val_loss"],
-        metrics["asset_acc"],
-        metrics["asset_f1"],
-        metrics["damage_macro_f1"],
-        metrics["damage_micro_f1"],
-        metrics["damage_hamming"],
-        per_class,
+        metrics["bridge_macro_f1"],
+        metrics["road_macro_f1"],
     )
 
 
