@@ -11,6 +11,7 @@ dependencies = [
     "kaggle>=1.6",
     "loguru>=0.7",
     "pandas",
+    "python-dotenv>=1.0",
     "scikit-learn",
     "torch>=2.10.0",
     "torchvision>=0.25.0",
