@@ -32,8 +32,18 @@ def _download_rdd2022(dest_dir: str, kaggle_dataset: str) -> None:
     os.makedirs(dest_dir, exist_ok=True)
     logger.info("Downloading '{}' -> {}", kaggle_dataset, dest_dir)
 
+    from dotenv import load_dotenv
+    load_dotenv()
+
     import kaggle as kg
-    kg.api.authenticate()
+
+    username = os.environ.get("KAGGLE_USERNAME")
+    key = os.environ.get("KAGGLE_KEY")
+    if username and key:
+        kg.api.credentials = kg.KaggleApi.authenticate(username, key)
+    else:
+        kg.api.authenticate()
+
     kg.api.dataset_download_files(
         kaggle_dataset,
         path=dest_dir,

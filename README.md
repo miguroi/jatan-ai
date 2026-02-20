@@ -8,10 +8,21 @@ Multi-task ResNet50 for infrastructure damage assessment on bridge (dacl1k) and 
 uv sync
 ```
 
+## Kaggle Credentials
+
+Create `.env` file:
+
+```
+KAGGLE_USERNAME=your_username
+KAGGLE_KEY=your_api_key
+```
+
+Get API key from https://www.kaggle.com/settings
+
 ## Usage
 
 ```bash
-# Download datasets
+# Download datasets (requires Kaggle credentials in .env)
 uv run main.py download [--data-root data/raw]
 
 # Train model
