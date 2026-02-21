@@ -133,6 +133,15 @@ def _aggregate_passability(labels: list[str]) -> str:
 
 
 def cmd_generate_annotations(args: argparse.Namespace) -> None:
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    if not args.api_key:
+        args.api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not args.api_key:
+        logger.error("No API key found. Set OPENROUTER_API_KEY in .env or pass --api-key.")
+        sys.exit(1)
+
     if args.domain == "bridge":
         from src.vlm.annotation_generator import AnnotationGenerator
         generator = AnnotationGenerator(
@@ -425,8 +434,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Data root — dacl10k for bridge, data/raw for road (default: data/dacl10k)")
     p_ga.add_argument("--output",        default="data/vlm_annotations.jsonl",
                       help="Output JSONL path (default: data/vlm_annotations.jsonl)")
-    p_ga.add_argument("--api-key",       required=True,
-                      help="API key for the OpenAI-compatible vision endpoint")
+    p_ga.add_argument("--api-key",       default=None,
+                      help="API key (default: OPENROUTER_API_KEY from .env)")
     p_ga.add_argument("--base-url",      default="https://openrouter.ai/api/v1",
                       help="Base URL for the API (default: OpenRouter)")
     p_ga.add_argument("--model",         default="qwen/qwen2-vl-72b-instruct",

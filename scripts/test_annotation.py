@@ -27,12 +27,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import textwrap
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Allow running from repo root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+load_dotenv()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -215,7 +220,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--domain",     choices=["bridge", "road"], default="bridge")
     parser.add_argument("--data-root",  default="data/dacl10k",
                         help="data/dacl10k for bridge, data/raw for road")
-    parser.add_argument("--api-key",    required=True)
+    parser.add_argument("--api-key",    default=None,
+                        help="API key (default: OPENROUTER_API_KEY from .env)")
     parser.add_argument("--base-url",   default="https://openrouter.ai/api/v1")
     parser.add_argument("--model",      default="qwen/qwen2-vl-72b-instruct")
     parser.add_argument("--split",      default="train")
@@ -226,6 +232,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if not args.api_key:
+        args.api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not args.api_key:
+        print("ERROR: No API key found. Set OPENROUTER_API_KEY in .env or pass --api-key.")
+        sys.exit(1)
     if args.domain == "bridge":
         test_bridge(args)
     else:
