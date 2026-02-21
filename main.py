@@ -429,8 +429,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="API key for the OpenAI-compatible vision endpoint")
     p_ga.add_argument("--base-url",      default="https://openrouter.ai/api/v1",
                       help="Base URL for the API (default: OpenRouter)")
-    p_ga.add_argument("--model",         default="google/gemini-2.0-flash-001",
-                      help="Vision model to use (default: google/gemini-2.0-flash-001)")
+    p_ga.add_argument("--model",         default="qwen/qwen2-vl-72b-instruct",
+                      help="Vision model to use (default: qwen/qwen2-vl-72b-instruct)")
     p_ga.add_argument("--split",         default="train",
                       help="Dataset split to annotate (default: train)")
     p_ga.add_argument("--max-retries",   type=int,   default=3)
