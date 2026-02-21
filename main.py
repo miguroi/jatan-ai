@@ -71,6 +71,7 @@ def cmd_train(args: argparse.Namespace) -> None:
             batch_size=args.batch_size,
             epochs1=args.epochs1,
             epochs2=args.epochs2,
+            resume_phase2=args.resume_phase2,
         )
         trainer.run()
 
@@ -291,6 +292,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Epochs for full fine-tune phase")
     p_tr.add_argument("--data-root",  default="data/raw",
                       help="Data root (use data/dacl10k for bridge-seg)")
+    p_tr.add_argument("--resume-phase2", action="store_true",
+                      help="Skip Phase 1 and load checkpoints/bridge_seg_best.pt directly into Phase 2")
     p_tr.set_defaults(func=cmd_train)
 
     # eval

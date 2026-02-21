@@ -256,6 +256,9 @@ class BridgeSegTrainer:
 
     Phase 1: freeze encoder, train decode_head only (AdamW lr=1e-3).
     Phase 2: unfreeze encoder, differential LR + CosineAnnealingLR.
+
+    Resume logic: if checkpoints/bridge_seg_best.pt exists and was saved during
+    Phase 1, --resume-phase2 skips Phase 1 and loads those weights directly.
     """
 
     def __init__(
@@ -269,6 +272,7 @@ class BridgeSegTrainer:
         checkpoint_dir: str = "checkpoints",
         patience: int = 5,
         num_workers: int = min(4, os.cpu_count() or 1),
+        resume_phase2: bool = False,
     ) -> None:
         self.model = model
         self.device = device
@@ -279,7 +283,9 @@ class BridgeSegTrainer:
         self.checkpoint_dir = checkpoint_dir
         self.patience = patience
         self.num_workers = num_workers
+        self.resume_phase2 = resume_phase2
         self.ckpt_path = os.path.join(checkpoint_dir, "bridge_seg_best.pt")
+        self._scaler = torch.amp.GradScaler("cuda")
 
         os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -304,13 +310,22 @@ class BridgeSegTrainer:
             collate_fn=custom_collate_fn,
         )
 
-        # Phase 1: decode head only
-        self.model.freeze_bridge_seg_encoder()
-        optimizer1 = torch.optim.AdamW(
-            self.model.bridge_seg_model.decode_head.parameters(), lr=1e-3
-        )
-        logger.info("BridgeSegTrainer Phase 1: training decode_head only")
-        self._train_phase(optimizer1, self.epochs1, patience=None)
+        if self.resume_phase2:
+            if not os.path.exists(self.ckpt_path):
+                raise FileNotFoundError(
+                    f"--resume-phase2 requested but no checkpoint found at {self.ckpt_path}"
+                )
+            state_dict = torch.load(self.ckpt_path, map_location=self.device)
+            self.model.bridge_seg_model.load_state_dict(state_dict, strict=False)
+            logger.info("Loaded Phase 1 checkpoint from {} — skipping Phase 1", self.ckpt_path)
+        else:
+            # Phase 1: decode head only
+            self.model.freeze_bridge_seg_encoder()
+            optimizer1 = torch.optim.AdamW(
+                self.model.bridge_seg_model.decode_head.parameters(), lr=1e-3
+            )
+            logger.info("BridgeSegTrainer Phase 1: training decode_head only")
+            self._train_phase(optimizer1, self.epochs1, patience=None)
 
         # Phase 2: full fine-tune with differential LR
         self.model.unfreeze_bridge_seg_encoder()
@@ -371,13 +386,16 @@ class BridgeSegTrainer:
             masks = torch.stack([m for m in masks_list if m is not None]).to(self.device)
 
             optimizer.zero_grad()
-            out = self.model.segment_bridge(images)
-            loss = F.binary_cross_entropy_with_logits(out["seg_logits"], masks)
-            loss.backward()
+            with torch.amp.autocast("cuda"):
+                out = self.model.segment_bridge(images)
+                loss = F.binary_cross_entropy_with_logits(out["seg_logits"], masks)
+            self._scaler.scale(loss).backward()
+            self._scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(
                 self.model.bridge_seg_model.parameters(), max_norm=1.0
             )
-            optimizer.step()
+            self._scaler.step(optimizer)
+            self._scaler.update()
 
             running_loss += loss.item()
             n_batches += 1
@@ -398,8 +416,9 @@ class BridgeSegTrainer:
                 masks_list = batch["mask"]
                 masks = torch.stack([m for m in masks_list if m is not None]).to(self.device)
 
-                out = self.model.segment_bridge(images)
-                loss = F.binary_cross_entropy_with_logits(out["seg_logits"], masks)
+                with torch.amp.autocast("cuda"):
+                    out = self.model.segment_bridge(images)
+                    loss = F.binary_cross_entropy_with_logits(out["seg_logits"], masks)
 
                 preds   = (out["probs"] > 0.5).float()
                 targets = masks
