@@ -71,7 +71,7 @@ def _build_annotation_prompt(detections: list[dict]) -> str:
     if not detections:
         return (
             "This bridge image shows no visible defects. "
-            "Write a 2-3 sentence expert inspection report confirming no defects are observed."
+            "Write a 1-2 sentence expert inspection report confirming no defects are observed."
         )
     lines = []
     for d in detections:
@@ -85,9 +85,10 @@ def _build_annotation_prompt(detections: list[dict]) -> str:
         "You are a licensed bridge structural engineer conducting a visual inspection. "
         "The following defects have been detected by automated segmentation:\n\n"
         f"{defect_list}\n\n"
-        "Write a professional 3-5 sentence inspection report describing these defects, "
-        "their potential structural significance, and recommended follow-up actions. "
-        "Be concise and technical. Do not repeat the defect list verbatim."
+        "Write a 1-2 sentence, actionable inspection report. "
+        "Describe the observed damage and its structural implications, "
+        "then state the recommended action (e.g., 'immediate closure', 'schedule repair', 'monitor'). "
+        "Be direct and concise. Do not repeat the defect list verbatim."
     )
 
 
@@ -283,16 +284,17 @@ def _build_road_annotation_prompt(detected_names: list[str]) -> str:
     if not detected_names:
         return (
             "This road image shows no visible damage. "
-            "Write a 2-3 sentence expert road condition report confirming no defects are observed."
+            "Write a 1-2 sentence expert road condition report confirming no defects are observed."
         )
     damage_list = "\n".join(f"- {name}" for name in detected_names)
     return (
         "You are a licensed road infrastructure engineer conducting a pavement condition survey. "
         "The following damage types have been detected in this road image:\n\n"
         f"{damage_list}\n\n"
-        "Write a professional 3-5 sentence condition report describing the observed damage, "
-        "its likely causes, potential impact on road safety and vehicle passage, "
-        "and recommended maintenance actions. Be concise and technical."
+        "Write a 1-2 sentence, actionable condition report. "
+        "Describe the observed damage and its impact on vehicle passage, "
+        "then state the recommended action (e.g., 'close to heavy vehicles', 'patch within 48h', 'monitor'). "
+        "Be direct and concise."
     )
 
 
