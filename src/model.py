@@ -10,6 +10,9 @@ _N_SEG_CLASSES = 6
 
 _DS_WEIGHT = 0.65
 
+_PASSABILITY_BISA  = 0.6   # configurable: clear fraction above which all vehicles can pass
+_PASSABILITY_RODA2 = 0.2   # configurable: clear fraction above which motorcycles can pass
+
 
 class JatanMTL(nn.Module):
     """Multi-task learning model for road and bridge damage detection.
@@ -154,10 +157,11 @@ class JatanMTL(nn.Module):
         depth_map = self._normalize_depth(depth_map)
 
         return {
-            "seg_logits": seg_logits,
-            "seg_map": seg_map,
-            "depth_map": depth_map,
-            "severity": self.compute_severity(seg_map, depth_map),
+            "seg_logits":  seg_logits,
+            "seg_map":     seg_map,
+            "depth_map":   depth_map,
+            "severity":    self.compute_severity(seg_map, depth_map),
+            "passability": self.compute_passability(seg_map, depth_map),
         }
 
     @staticmethod
@@ -168,6 +172,38 @@ class JatanMTL(nn.Module):
         d_min = flat.min(dim=1).values.view(B, 1, 1)
         d_max = flat.max(dim=1).values.view(B, 1, 1)
         return 0.1 + (depth - d_min) / (d_max - d_min + 1e-8) * 0.9
+
+    @staticmethod
+    def compute_passability(seg_map: torch.Tensor, depth_map: torch.Tensor) -> list[str]:
+        """Depth-weighted clear road fraction → transportation modal passability.
+
+        Clear fraction = Σ undamaged_road×depth / (Σ all_road×depth + Σ debris×depth)
+
+        > 0.6  → Bisa      (all vehicles)
+        0.2–0.6 → Roda-2   (motorcycle only)
+        < 0.2  → Tidak Bisa (blocked)
+
+        Debris (class 2) included in denominator as impassable obstruction.
+        Background (class 5) excluded — not infrastructure.
+        """
+        undamaged = (seg_map == 3).float() * depth_map   # Undamaged Road
+        damaged   = (seg_map == 4).float() * depth_map   # Damaged Road
+        debris    = (seg_map == 2).float() * depth_map   # Destroyed/debris
+
+        clear = undamaged.sum(dim=(1, 2))
+        total = (undamaged + damaged + debris).sum(dim=(1, 2)).clamp(min=1e-8)
+
+        fraction = clear / total
+
+        result = []
+        for f in fraction.tolist():
+            if f > _PASSABILITY_BISA:
+                result.append("Bisa")
+            elif f > _PASSABILITY_RODA2:
+                result.append("Roda-2")
+            else:
+                result.append("Tidak Bisa")
+        return result
 
     @staticmethod
     def compute_severity(seg_map: torch.Tensor, depth_map: torch.Tensor) -> torch.Tensor:
