@@ -132,6 +132,50 @@ def _aggregate_passability(labels: list[str]) -> str:
     return "Bisa"
 
 
+def cmd_generate_annotations(args: argparse.Namespace) -> None:
+    if args.domain == "bridge":
+        from src.vlm.annotation_generator import AnnotationGenerator
+        generator = AnnotationGenerator(
+            data_root=args.data_root,
+            output_path=args.output,
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model=args.model,
+            split=args.split,
+            max_retries=args.max_retries,
+            retry_delay=args.retry_delay,
+            request_delay=args.request_delay,
+        )
+    else:
+        from src.vlm.annotation_generator import RoadAnnotationGenerator
+        generator = RoadAnnotationGenerator(
+            data_root=args.data_root,
+            output_path=args.output,
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model=args.model,
+            split=args.split,
+            max_retries=args.max_retries,
+            retry_delay=args.retry_delay,
+            request_delay=args.request_delay,
+        )
+    generator.run()
+
+
+def cmd_train_vlm(args: argparse.Namespace) -> None:
+    from src.vlm.trainer import VLMTrainer
+
+    trainer = VLMTrainer(
+        annotations_path=args.annotations,
+        output_dir=args.output_dir,
+        batch_size=args.batch_size,
+        grad_accum=args.grad_accum,
+        epochs=args.epochs,
+        lr=args.lr,
+    )
+    trainer.run()
+
+
 def cmd_infer(args: argparse.Namespace) -> None:
     import json
     import torch
@@ -168,6 +212,30 @@ def cmd_infer(args: argparse.Namespace) -> None:
 
     image_paths = args.image_paths
 
+    # Lazy-load VLM if reasoning is requested
+    vlm = None
+    if getattr(args, "with_reasoning", False):
+        if args.domain == "bridge":
+            if not getattr(args, "vlm_adapter", None):
+                logger.error("--with-reasoning requires --vlm-adapter for bridge domain.")
+                sys.exit(1)
+            from src.vlm.inference import BridgeVLMInference
+            logger.info("Loading bridge VLM adapter from {}", args.vlm_adapter)
+            vlm = BridgeVLMInference(
+                adapter_path=args.vlm_adapter,
+                max_new_tokens=getattr(args, "max_new_tokens", 256),
+            )
+        else:  # road
+            if not getattr(args, "vlm_road_adapter", None):
+                logger.error("--with-reasoning requires --vlm-road-adapter for road domain.")
+                sys.exit(1)
+            from src.vlm.inference import RoadVLMInference
+            logger.info("Loading road VLM adapter from {}", args.vlm_road_adapter)
+            vlm = RoadVLMInference(
+                adapter_path=args.vlm_road_adapter,
+                max_new_tokens=getattr(args, "max_new_tokens", 256),
+            )
+
     per_image = []
     all_severities: list[float] = []
     all_passability: list[str] = []
@@ -192,14 +260,23 @@ def cmd_infer(args: argparse.Namespace) -> None:
                 for i in range(len(_BRIDGE_CLASSES))
             }
 
-            per_image.append({
+            entry: dict = {
                 "image":   image_path,
                 "domain":  "bridge",
                 "bridge_seg": {
                     "presence": detected_classes,
                     "coverage": coverage,
                 },
-            })
+            }
+
+            if vlm is not None:
+                vlm_result = vlm.describe(img, probs_map, threshold=args.threshold)
+                entry["reasoning"] = {
+                    "report":   vlm_result["report"],
+                    "detected": vlm_result["detected"],
+                }
+
+            per_image.append(entry)
 
         else:  # road
             x_cls = cls_tfm(img).unsqueeze(0).to(device)
@@ -230,7 +307,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
             all_severities.append(severity_score)
             all_passability.append(passability)
 
-            per_image.append({
+            road_entry: dict = {
                 "image":        image_path,
                 "domain":       "road",
                 "damage":       damage_classes,
@@ -238,7 +315,19 @@ def cmd_infer(args: argparse.Namespace) -> None:
                 "severity":     {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
                 "passability":  passability,
                 "segmentation": seg_pixel_pct,
-            })
+            }
+
+            if vlm is not None:
+                vlm_result = vlm.describe(
+                    img, damage_classes, seg_map, severity_score, passability,
+                    threshold=args.threshold,
+                )
+                road_entry["reasoning"] = {
+                    "report":   vlm_result["report"],
+                    "detected": vlm_result["detected"],
+                }
+
+            per_image.append(road_entry)
 
     if args.domain == "road" and all_severities:
         agg_severity_score = max(all_severities)
@@ -317,7 +406,53 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Road model checkpoint (ignored for bridge domain)")
     p_in.add_argument("--threshold",  type=float, default=0.5,
                       help="Sigmoid threshold for road classification (default: 0.5)")
+    p_in.add_argument("--with-reasoning", action="store_true",
+                      help="Run VLM reasoning after bridge segmentation (requires --vlm-adapter)")
+    p_in.add_argument("--vlm-adapter", default=None,
+                      help="Path to bridge LoRA adapter dir (e.g. checkpoints/vlm_lora/bridge/final_adapter)")
+    p_in.add_argument("--vlm-road-adapter", default=None,
+                      help="Path to road LoRA adapter dir (e.g. checkpoints/vlm_lora/road/final_adapter)")
+    p_in.add_argument("--max-new-tokens", type=int, default=256,
+                      help="Max new tokens for VLM generation (default: 256)")
     p_in.set_defaults(func=cmd_infer)
+
+    # generate-annotations
+    p_ga = sub.add_parser("generate-annotations",
+                          help="Generate VLM training annotations via vision API")
+    p_ga.add_argument("--domain", choices=["bridge", "road"], default="bridge",
+                      help="Domain to annotate: bridge (dacl10k) or road (RDD2022) (default: bridge)")
+    p_ga.add_argument("--data-root",     default="data/dacl10k",
+                      help="Data root — dacl10k for bridge, data/raw for road (default: data/dacl10k)")
+    p_ga.add_argument("--output",        default="data/vlm_annotations.jsonl",
+                      help="Output JSONL path (default: data/vlm_annotations.jsonl)")
+    p_ga.add_argument("--api-key",       required=True,
+                      help="API key for the OpenAI-compatible vision endpoint")
+    p_ga.add_argument("--base-url",      default="https://openrouter.ai/api/v1",
+                      help="Base URL for the API (default: OpenRouter)")
+    p_ga.add_argument("--model",         default="google/gemini-2.0-flash-001",
+                      help="Vision model to use (default: google/gemini-2.0-flash-001)")
+    p_ga.add_argument("--split",         default="train",
+                      help="Dataset split to annotate (default: train)")
+    p_ga.add_argument("--max-retries",   type=int,   default=3)
+    p_ga.add_argument("--retry-delay",   type=float, default=5.0,
+                      help="Base retry delay in seconds (doubles on each attempt)")
+    p_ga.add_argument("--request-delay", type=float, default=1.0,
+                      help="Sleep between successful requests in seconds (default: 1.0)")
+    p_ga.set_defaults(func=cmd_generate_annotations)
+
+    # train-vlm
+    p_tv = sub.add_parser("train-vlm",
+                          help="LoRA-finetune Qwen2-VL-2B-Instruct on bridge annotations")
+    p_tv.add_argument("--annotations",  default="data/vlm_annotations.jsonl",
+                      help="Path to JSONL annotations (default: data/vlm_annotations.jsonl)")
+    p_tv.add_argument("--output-dir",   default="checkpoints/vlm_lora",
+                      help="Checkpoint output dir (default: checkpoints/vlm_lora)")
+    p_tv.add_argument("--batch-size",   type=int,   default=4)
+    p_tv.add_argument("--grad-accum",   type=int,   default=4,
+                      help="Gradient accumulation steps (default: 4)")
+    p_tv.add_argument("--epochs",       type=int,   default=3)
+    p_tv.add_argument("--lr",           type=float, default=5e-5)
+    p_tv.set_defaults(func=cmd_train_vlm)
 
     return parser
 
