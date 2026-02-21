@@ -86,9 +86,14 @@ def test_bridge(args: argparse.Namespace) -> None:
         model=args.model,
     )
 
-    for sample_idx in range(min(args.n_samples, len(dataset))):
+    if args.indices:
+        indices = [int(i) for i in args.indices.split(",")]
+    else:
+        indices = list(range(min(args.n_samples, len(dataset))))
+
+    for idx_num, sample_idx in enumerate(indices, 1):
         logger.info(f"\n\n{'█' * 72}")
-        logger.info("  SAMPLE {} / {}", sample_idx + 1, args.n_samples)
+        logger.info("  SAMPLE {} / {}  (dataset index: {})", idx_num, len(indices), sample_idx)
         logger.info(f"{'█' * 72}")
 
         item = dataset[sample_idx]
@@ -178,9 +183,14 @@ def test_road(args: argparse.Namespace) -> None:
         model=args.model,
     )
 
-    for sample_idx in range(min(args.n_samples, len(dataset))):
+    if args.indices:
+        indices = [int(i) for i in args.indices.split(",")]
+    else:
+        indices = list(range(min(args.n_samples, len(dataset))))
+
+    for idx_num, sample_idx in enumerate(indices, 1):
         logger.info(f"\n\n{'█' * 72}")
-        logger.info("  SAMPLE {} / {}", sample_idx + 1, args.n_samples)
+        logger.info("  SAMPLE {} / {}  (dataset index: {})", idx_num, len(indices), sample_idx)
         logger.info(f"{'█' * 72}")
 
         item = dataset[sample_idx]
@@ -246,7 +256,7 @@ def test_road(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Test annotation generation on a small sample."
+        description="Test annotation generation on a small sample or single image."
     )
     parser.add_argument("--domain",     choices=["bridge", "road"], default="bridge")
     parser.add_argument("--data-root",  default="data/dacl10k",
@@ -254,10 +264,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key",    default=None,
                         help="API key (default: OPENROUTER_API_KEY from .env)")
     parser.add_argument("--base-url",   default="https://openrouter.ai/api/v1")
-    parser.add_argument("--model",      default="qwen/qwen2-vl-72b-instruct")
+    parser.add_argument("--model",      default="qwen/qwen2.5-vl-72b-instruct")
     parser.add_argument("--split",      default="train")
+    parser.add_argument("--indices",    default=None,
+                        help="Comma-separated dataset indices to test (e.g., '0,42,100')")
     parser.add_argument("--n-samples",  type=int, default=2,
-                        help="Number of images to test (default: 2)")
+                        help="Number of images to test from dataset (default: 2, ignored if --indices is set)")
     return parser
 
 
