@@ -67,12 +67,56 @@ def _extract_defect_metadata(mask: np.ndarray, class_names: list[str]) -> list[d
     return detections
 
 
-def _build_annotation_prompt(detections: list[dict]) -> str:
+def _compute_severity_score(detections: list[dict]) -> float:
+    """
+    Compute severity score (0-1) from detected bridge defects.
+
+    Structural defects have higher weight. Coverage % is factored in.
+    Formula: sum(structural_weight * coverage_pct) / 100, capped at 1.0
+    """
+    if not detections:
+        return 0.0
+
+    # Structural defects have weight 1.0, cosmetic have weight 0.2
+    total = 0.0
+    for d in detections:
+        weight = 1.0 if d["structural"] else 0.2
+        total += weight * d["coverage_pct"]
+
+    return min(total / 100.0, 1.0)
+
+
+def _severity_label(score: float) -> str:
+    """Convert severity score to Indonesian label."""
+    if score < 0.2:
+        return "Ringan"
+    elif score < 0.5:
+        return "Sedang"
+    return "Berat"
+
+
+def _passability_from_severity(severity_score: float) -> str:
+    """Map severity score to passability label (bridge and road)."""
+    if severity_score < 0.3:
+        return "Bisa"
+    elif severity_score < 0.6:
+        return "Roda-2"
+    return "Tidak Bisa"
+
+
+def _build_annotation_prompt(
+    detections: list[dict],
+    severity_score: float,
+    passability: str,
+) -> str:
+    """Build annotation prompt with severity and passability context."""
     if not detections:
         return (
             "This bridge image shows no visible defects. "
+            "Severity: Ringan (0.0). Passability: Bisa. "
             "Write a 1-2 sentence expert inspection report confirming no defects are observed."
         )
+
     lines = []
     for d in detections:
         tag = " [STRUCTURAL]" if d["structural"] else ""
@@ -81,13 +125,17 @@ def _build_annotation_prompt(detections: list[dict]) -> str:
             f"located in the {d['region']} region"
         )
     defect_list = "\n".join(lines)
+    severity_label = _severity_label(severity_score)
+
     return (
         "You are a licensed bridge structural engineer conducting a visual inspection. "
         "The following defects have been detected by automated segmentation:\n\n"
         f"{defect_list}\n\n"
+        f"Severity: {severity_label} ({severity_score:.2f}). "
+        f"Passability: {passability}.\n\n"
         "Write a 1-2 sentence, actionable inspection report. "
-        "Describe the observed damage and its structural implications, "
-        "then state the recommended action (e.g., 'immediate closure', 'schedule repair', 'monitor'). "
+        "Describe the observed damage and state the recommended action "
+        "(e.g., 'immediate closure', 'schedule repair', 'monitor'). "
         "Be direct and concise. Do not repeat the defect list verbatim."
     )
 
@@ -230,7 +278,12 @@ class AnnotationGenerator:
                 item = dataset[idx]
                 mask = item["mask"].numpy()  # (19, H, W)
                 detections = _extract_defect_metadata(mask, _BRIDGE_CLASSES)
-                prompt     = _build_annotation_prompt(detections)
+
+                # Compute severity and passability
+                severity_score = _compute_severity_score(detections)
+                passability    = _passability_from_severity(severity_score)
+
+                prompt     = _build_annotation_prompt(detections, severity_score, passability)
                 defect_names = [d["class"] for d in detections]
 
                 try:
@@ -279,21 +332,54 @@ class AnnotationGenerator:
 # Road annotation generator
 # ---------------------------------------------------------------------------
 
-def _build_road_annotation_prompt(detected_names: list[str]) -> str:
+def _compute_road_severity_score(detected_codes: list[str]) -> float:
+    """
+    Compute severity score (0-1) from detected road damage codes.
+
+    D40 (pothole) = highest severity (1.0)
+    D20 (alligator crack) = high (0.8)
+    D10 (transverse crack) = medium (0.5)
+    D00 (longitudinal crack) = low (0.3)
+    Multiple defects: take max, then add 0.1 per additional defect (capped at 1.0)
+    """
+    if not detected_codes:
+        return 0.0
+
+    severity_map = {
+        "D00": 0.3,
+        "D10": 0.5,
+        "D20": 0.8,
+        "D40": 1.0,
+    }
+    max_severity = max(severity_map.get(c, 0.0) for c in detected_codes)
+    additional = min(0.1 * (len(detected_codes) - 1), 0.2)
+    return min(max_severity + additional, 1.0)
+
+
+def _build_road_annotation_prompt(
+    detected_names: list[str],
+    severity_score: float,
+    passability: str,
+) -> str:
     """Build an expert prompt for road damage annotation."""
     if not detected_names:
         return (
             "This road image shows no visible damage. "
+            f"Severity: Ringan ({0.0:.2f}). Passability: Bisa. "
             "Write a 1-2 sentence expert road condition report confirming no defects are observed."
         )
     damage_list = "\n".join(f"- {name}" for name in detected_names)
+    severity_label = _severity_label(severity_score)
+
     return (
         "You are a licensed road infrastructure engineer conducting a pavement condition survey. "
         "The following damage types have been detected in this road image:\n\n"
         f"{damage_list}\n\n"
+        f"Severity: {severity_label} ({severity_score:.2f}). "
+        f"Passability: {passability}.\n\n"
         "Write a 1-2 sentence, actionable condition report. "
-        "Describe the observed damage and its impact on vehicle passage, "
-        "then state the recommended action (e.g., 'close to heavy vehicles', 'patch within 48h', 'monitor'). "
+        "State the recommended action based on severity and passability "
+        "(e.g., 'close to heavy vehicles', 'patch within 48h', 'monitor'). "
         "Be direct and concise."
     )
 
@@ -405,7 +491,12 @@ class RoadAnnotationGenerator:
                     if v > 0.5 and _ROAD_CLASSES[i] != "NoDefect"
                 ]
                 detected_names = [_ROAD_DAMAGE_NAMES[c] for c in detected_codes]
-                prompt = _build_road_annotation_prompt(detected_names)
+
+                # Compute severity and passability
+                severity_score = _compute_road_severity_score(detected_codes)
+                passability    = _passability_from_severity(severity_score)
+
+                prompt = _build_road_annotation_prompt(detected_names, severity_score, passability)
 
                 image_path = dataset._samples[idx]
                 try:
