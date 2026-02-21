@@ -54,6 +54,7 @@ class BridgeDataset(Dataset):
     """dacl10k bridge segmentation dataset (19 classes, pixel-level masks)."""
 
     def __init__(self, split: str, data_root: str = "data/dacl10k") -> None:
+        import pickle
         from dacl10k.dacl10kdataset import Dacl10kDataset
 
         dacl_split = {"val": "validation"}.get(split, split)
@@ -64,6 +65,19 @@ class BridgeDataset(Dataset):
             resize_mask=(512, 512),
             normalize_img=True,
         )
+
+        cache_file = os.path.join(data_root, f"prefetched_{dacl_split}.pkl")
+        if os.path.exists(cache_file):
+            print(f"Loading prefetched cache from {cache_file}")
+            with open(cache_file, "rb") as f:
+                self._inner.prefetched_data = pickle.load(f)
+            self._inner.use_prefetched_data = True
+        else:
+            print(f"Prefetching {dacl_split} split (one-time, ~minutes)...")
+            self._inner.run_prefetching(n_jobs=8)
+            with open(cache_file, "wb") as f:
+                pickle.dump(self._inner.prefetched_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"Cache saved to {cache_file}")
 
     def __len__(self) -> int:
         return len(self._inner)
