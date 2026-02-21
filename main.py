@@ -102,7 +102,25 @@ def cmd_eval(args: argparse.Namespace) -> None:
     )
 
 
+def _severity_label(score: float) -> str:
+    if score < 0.2:
+        return "Ringan"
+    elif score < 0.5:
+        return "Sedang"
+    return "Berat"
+
+
+def _aggregate_passability(labels: list[str]) -> str:
+    """Safety-first (worst-case) aggregation across multiple images."""
+    if "Tidak Bisa" in labels:
+        return "Tidak Bisa"
+    if "Roda-2" in labels:
+        return "Roda-2"
+    return "Bisa"
+
+
 def cmd_infer(args: argparse.Namespace) -> None:
+    import json
     import torch
     from PIL import Image
     from torchvision import transforms
@@ -119,60 +137,80 @@ def cmd_infer(args: argparse.Namespace) -> None:
 
     model.eval()
 
-    img = Image.open(args.image_path).convert("RGB")
-
-    # Classification
     cls_tfm = transforms.Compose([
         transforms.Resize((384, 384)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
-    x_cls = cls_tfm(img).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        logits = model(x_cls, args.domain)
-        probs = torch.sigmoid(logits)[0].cpu().tolist()
-
-    classes = _BRIDGE_CLASSES if args.domain == "bridge" else _ROAD_CLASSES
-    print(f"\nDamage classification ({args.domain}) — {args.image_path}")
-    print(f"{'Class':<20} {'Prob':>6}  {'Detected':>8}")
-    print("-" * 38)
-    for cls_name, prob in zip(classes, probs):
-        detected = "YES" if prob >= args.threshold else "no"
-        print(f"{cls_name:<20} {prob:>6.3f}  {detected:>8}")
-
-    # Segmentation
     seg_tfm = transforms.Compose([
         transforms.Resize((640, 640)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
-    x_seg = seg_tfm(img).unsqueeze(0).to(device)
 
-    with torch.no_grad():
-        out = model.segment(x_seg)
+    classes = _BRIDGE_CLASSES if args.domain == "bridge" else _ROAD_CLASSES
+    image_paths = args.image_paths
 
-    import numpy as np
-    seg_map = out["seg_map"][0].cpu().numpy()
-    severity_score = float(out["severity"][0].cpu())
-    total_pixels = seg_map.size
+    per_image = []
+    all_severities: list[float] = []
+    all_passability: list[str] = []
 
-    print(f"\nSegmentation results")
-    print(f"{'Class':<25} {'Pixels':>8}  {'%':>6}")
-    print("-" * 44)
-    for cls_idx, cls_name in enumerate(EIDSEG_CLASSES):
-        count = int((seg_map == cls_idx).sum())
-        pct = count / total_pixels * 100
-        print(f"{cls_name:<25} {count:>8}  {pct:>5.2f}%")
+    for image_path in image_paths:
+        img = Image.open(image_path).convert("RGB")
 
-    if severity_score < 0.2:
-        severity_label = "Ringan"
-    elif severity_score < 0.5:
-        severity_label = "Sedang"
-    else:
-        severity_label = "Berat"
+        # Classification
+        x_cls = cls_tfm(img).unsqueeze(0).to(device)
+        with torch.no_grad():
+            logits = model(x_cls, args.domain)
+            probs = torch.sigmoid(logits)[0].cpu().tolist()
 
-    print(f"\nSeverity score: {severity_score:.4f}  ({severity_label})")
+        damage_classes = {
+            cls_name: round(prob, 4)
+            for cls_name, prob in zip(classes, probs)
+        }
+        detected = [c for c, p in damage_classes.items() if p >= args.threshold]
+
+        # Segmentation + passability
+        x_seg = seg_tfm(img).unsqueeze(0).to(device)
+        with torch.no_grad():
+            out = model.segment(x_seg)
+
+        seg_map = out["seg_map"][0].cpu().numpy()
+        severity_score = float(out["severity"][0].cpu())
+        passability = out["passability"][0]
+
+        total_pixels = seg_map.size
+        seg_pixel_pct = {
+            cls_name: round(int((seg_map == i).sum()) / total_pixels * 100, 2)
+            for i, cls_name in enumerate(EIDSEG_CLASSES)
+        }
+
+        all_severities.append(severity_score)
+        all_passability.append(passability)
+
+        per_image.append({
+            "image":        image_path,
+            "domain":       args.domain,
+            "damage":       damage_classes,
+            "detected":     detected,
+            "severity":     {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
+            "passability":  passability,
+            "segmentation": seg_pixel_pct,
+        })
+
+    # Aggregate across all images
+    agg_severity_score = max(all_severities)
+    agg_passability = _aggregate_passability(all_passability)
+
+    result = {
+        "images":    per_image,
+        "aggregate": {
+            "severity":    {"score": round(agg_severity_score, 4), "label": _severity_label(agg_severity_score)},
+            "passability": agg_passability,
+        },
+    }
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -215,8 +253,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev.set_defaults(func=cmd_eval)
 
     # infer
-    p_in = sub.add_parser("infer", help="Run inference on a single image")
-    p_in.add_argument("image_path", help="Path to the input image")
+    p_in = sub.add_parser("infer", help="Run inference on one or more images")
+    p_in.add_argument("image_paths", nargs="+", help="Path(s) to input image(s)")
     p_in.add_argument(
         "--domain",
         choices=["bridge", "road"],
