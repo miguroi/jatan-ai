@@ -108,9 +108,19 @@ def _build_annotation_prompt(
     detections: list[dict],
     severity_score: float,
     passability: str,
+    cot: bool = False,
 ) -> str:
     """Build annotation prompt with severity and passability context."""
     if not detections:
+        if cot:
+            return (
+                "This bridge image shows no visible defects. "
+                "Severity: Ringan (0.0). Passability: Bisa.\n\n"
+                "Think step by step through the image, then write a 1-2 sentence expert inspection report. "
+                "Format your response exactly as:\n"
+                "<think>\n[your step-by-step reasoning]\n</think>\n"
+                "[your final 1-2 sentence report]"
+            )
         return (
             "This bridge image shows no visible defects. "
             "Severity: Ringan (0.0). Passability: Bisa. "
@@ -126,6 +136,20 @@ def _build_annotation_prompt(
         )
     defect_list = "\n".join(lines)
     severity_label = _severity_label(severity_score)
+
+    if cot:
+        return (
+            "You are a licensed bridge structural engineer conducting a visual inspection. "
+            "The following defects have been detected by automated segmentation:\n\n"
+            f"{defect_list}\n\n"
+            f"Severity: {severity_label} ({severity_score:.2f}). "
+            f"Passability: {passability}.\n\n"
+            "Think step by step: assess each defect, its structural significance, "
+            "and the overall condition. Then write a 1-2 sentence actionable inspection report.\n\n"
+            "Format your response exactly as:\n"
+            "<think>\n[your step-by-step reasoning]\n</think>\n"
+            "[your final 1-2 sentence report with recommended action]"
+        )
 
     return (
         "You are a licensed bridge structural engineer conducting a visual inspection. "
@@ -154,6 +178,7 @@ class AnnotationGenerator:
         max_retries: int = 3,
         retry_delay: float = 5.0,
         request_delay: float = 1.0,
+        cot: bool = False,
     ) -> None:
         self.data_root     = data_root
         self.output_path   = output_path
@@ -164,6 +189,7 @@ class AnnotationGenerator:
         self.max_retries   = max_retries
         self.retry_delay   = retry_delay
         self.request_delay = request_delay
+        self.cot           = cot
 
     # ------------------------------------------------------------------
     # Helpers
@@ -268,6 +294,7 @@ class AnnotationGenerator:
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         b64 = self._image_to_base64(img)
+        max_tokens = 1024 if self.cot else 512
 
         for attempt in range(self.max_retries):
             try:
@@ -285,7 +312,7 @@ class AnnotationGenerator:
                             ],
                         }
                     ],
-                    max_tokens=512,
+                    max_tokens=max_tokens,
                     temperature=0.3,
                 )
                 return response.choices[0].message.content.strip()
@@ -299,6 +326,23 @@ class AnnotationGenerator:
                     time.sleep(wait)
                 else:
                     raise
+
+    @staticmethod
+    def _split_cot_response(raw: str) -> tuple[str, str]:
+        """Split a CoT response into (reasoning, annotation).
+
+        Expects format: <think>...</think>[annotation]
+        Falls back to ("", raw) if the tag is absent.
+        """
+        import re
+        m = re.search(r"<think>(.*?)</think>(.*)", raw, re.DOTALL)
+        if m:
+            reasoning  = m.group(1).strip()
+            annotation = m.group(2).strip()
+        else:
+            reasoning  = ""
+            annotation = raw
+        return reasoning, annotation
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -329,15 +373,20 @@ class AnnotationGenerator:
                 severity_score = _compute_severity_score(detections)
                 passability    = _passability_from_severity(severity_score)
 
-                prompt     = _build_annotation_prompt(detections, severity_score, passability)
+                prompt     = _build_annotation_prompt(detections, severity_score, passability, cot=self.cot)
                 defect_names = [d["class"] for d in detections]
 
                 try:
                     img    = self._get_raw_image(dataset, idx)
-                    report = self._call_api(img, prompt)
+                    raw    = self._call_api(img, prompt)
                 except Exception as exc:
                     logger.error("Failed at index {}: {}", idx, exc)
                     continue
+
+                if self.cot:
+                    cot_reasoning, report = self._split_cot_response(raw)
+                else:
+                    cot_reasoning, report = "", raw
 
                 # Resolve image path for the JSONL record
                 inner = dataset._inner
@@ -354,15 +403,19 @@ class AnnotationGenerator:
                     except Exception:
                         pass
 
-                record = {
+                record: dict = {
                     "id":         record_id,
                     "image_path": image_path,
                     "defects":    defect_names,
+                    "severity":   round(severity_score, 4),
+                    "passability": passability,
                     "conversations": [
                         {"from": "human", "value": f"<image>\n{prompt}"},
                         {"from": "gpt",   "value": report},
                     ],
                 }
+                if self.cot and cot_reasoning:
+                    record["cot_reasoning"] = cot_reasoning
                 out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_f.flush()
 
@@ -406,9 +459,19 @@ def _build_road_annotation_prompt(
     detected_names: list[str],
     severity_score: float,
     passability: str,
+    cot: bool = False,
 ) -> str:
     """Build an expert prompt for road damage annotation."""
     if not detected_names:
+        if cot:
+            return (
+                "This road image shows no visible damage. "
+                f"Severity: Ringan ({0.0:.2f}). Passability: Bisa.\n\n"
+                "Think step by step through the road surface condition, then write a 1-2 sentence report. "
+                "Format your response exactly as:\n"
+                "<think>\n[your step-by-step reasoning]\n</think>\n"
+                "[your final 1-2 sentence report]"
+            )
         return (
             "This road image shows no visible damage. "
             f"Severity: Ringan ({0.0:.2f}). Passability: Bisa. "
@@ -416,6 +479,20 @@ def _build_road_annotation_prompt(
         )
     damage_list = "\n".join(f"- {name}" for name in detected_names)
     severity_label = _severity_label(severity_score)
+
+    if cot:
+        return (
+            "You are a licensed road infrastructure engineer conducting a pavement condition survey. "
+            "The following damage types have been detected in this road image:\n\n"
+            f"{damage_list}\n\n"
+            f"Severity: {severity_label} ({severity_score:.2f}). "
+            f"Passability: {passability}.\n\n"
+            "Think step by step: assess each damage type, its severity contribution, "
+            "and the overall road condition. Then write a 1-2 sentence actionable report.\n\n"
+            "Format your response exactly as:\n"
+            "<think>\n[your step-by-step reasoning]\n</think>\n"
+            "[your final 1-2 sentence report with recommended action]"
+        )
 
     return (
         "You are a licensed road infrastructure engineer conducting a pavement condition survey. "
@@ -444,6 +521,7 @@ class RoadAnnotationGenerator:
         max_retries: int = 3,
         retry_delay: float = 5.0,
         request_delay: float = 1.0,
+        cot: bool = False,
     ) -> None:
         self.data_root     = data_root
         self.output_path   = output_path
@@ -454,6 +532,7 @@ class RoadAnnotationGenerator:
         self.max_retries   = max_retries
         self.retry_delay   = retry_delay
         self.request_delay = request_delay
+        self.cot           = cot
 
     def _get_image_path(self, dataset, idx: int) -> str:
         """Get the image file path for the given dataset index."""
@@ -484,6 +563,7 @@ class RoadAnnotationGenerator:
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         b64 = self._image_to_base64(img)
+        max_tokens = 1024 if self.cot else 512
 
         for attempt in range(self.max_retries):
             try:
@@ -501,7 +581,7 @@ class RoadAnnotationGenerator:
                             ],
                         }
                     ],
-                    max_tokens=512,
+                    max_tokens=max_tokens,
                     temperature=0.3,
                 )
                 return response.choices[0].message.content.strip()
@@ -546,25 +626,34 @@ class RoadAnnotationGenerator:
                 severity_score = _compute_road_severity_score(detected_codes)
                 passability    = _passability_from_severity(severity_score)
 
-                prompt = _build_road_annotation_prompt(detected_names, severity_score, passability)
+                prompt = _build_road_annotation_prompt(detected_names, severity_score, passability, cot=self.cot)
 
                 image_path = dataset._samples[idx]
                 try:
-                    img    = Image.open(image_path).convert("RGB")
-                    report = self._call_api(img, prompt)
+                    img = Image.open(image_path).convert("RGB")
+                    raw = self._call_api(img, prompt)
                 except Exception as exc:
                     logger.error("Failed at index {}: {}", idx, exc)
                     continue
 
-                record = {
+                if self.cot:
+                    cot_reasoning, report = AnnotationGenerator._split_cot_response(raw)
+                else:
+                    cot_reasoning, report = "", raw
+
+                record: dict = {
                     "id":         record_id,
                     "image_path": str(image_path),
                     "defects":    detected_names,
+                    "severity":   round(severity_score, 4),
+                    "passability": passability,
                     "conversations": [
                         {"from": "human", "value": f"<image>\n{prompt}"},
                         {"from": "gpt",   "value": report},
                     ],
                 }
+                if self.cot and cot_reasoning:
+                    record["cot_reasoning"] = cot_reasoning
                 out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_f.flush()
 

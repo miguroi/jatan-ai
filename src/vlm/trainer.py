@@ -24,15 +24,17 @@ class VLMTrainer:
         epochs: int = 3,
         lr: float = 5e-5,
         val_fraction: float = 0.1,
+        cot: bool = False,
     ) -> None:
-        self.annotations_path = annotations_path
-        self.model_name       = model_name
-        self.output_dir       = output_dir
-        self.batch_size       = batch_size
-        self.grad_accum       = grad_accum
-        self.epochs           = epochs
-        self.lr               = lr
-        self.val_fraction     = val_fraction
+        self.annotations_path  = annotations_path
+        self.model_name        = model_name
+        self.output_dir        = output_dir
+        self.batch_size        = batch_size
+        self.grad_accum        = grad_accum
+        self.epochs            = epochs
+        self.lr                = lr
+        self.val_fraction      = val_fraction
+        self.cot               = cot
         self.final_adapter_dir = os.path.join(output_dir, "final_adapter")
 
         os.makedirs(output_dir, exist_ok=True)
@@ -76,12 +78,14 @@ class VLMTrainer:
             processor=processor,
             split="train",
             val_fraction=self.val_fraction,
+            cot=self.cot,
         )
         val_ds = VLMDataset(
             self.annotations_path,
             processor=processor,
             split="val",
             val_fraction=self.val_fraction,
+            cot=self.cot,
         )
         logger.info("Train: {} samples | Val: {} samples", len(train_ds), len(val_ds))
 
