@@ -8,11 +8,14 @@ import albumentations as A
 import numpy as np
 import torch
 from albumentations.pytorch import ToTensorV2
-from torch.utils.data import ConcatDataset, Dataset, WeightedRandomSampler
+from torch.utils.data import Dataset, WeightedRandomSampler
 
-from bikit.datasets import BikitDataset as _BikitDataset
-
-_BRIDGE_CLASSES = ["NoDamage", "Crack", "Efflorescence", "Spalling", "BarsExposed", "Rust"]
+_BRIDGE_CLASSES = [
+    "Crack", "ACrack", "Wetspot", "Efflorescence", "Rust", "Rockpocket",
+    "Hollowareas", "Cavity", "Spalling", "Graffiti", "Weathering",
+    "Restformwork", "ExposedRebars",
+    "Bearing", "EJoint", "Drainage", "PEquipment", "JTape", "WConccor",
+]
 _N_BRIDGE = len(_BRIDGE_CLASSES)
 
 _ROAD_CLASSES = ["D00", "D10", "D20", "D40", "NoDefect"]
@@ -48,38 +51,29 @@ def get_transform(split: str) -> A.Compose:
 
 
 class BridgeDataset(Dataset):
-    def __init__(
-        self,
-        split: str,
-        transform: Optional[A.Compose] = None,
-        data_root: str = "data/raw",
-    ) -> None:
-        self.transform = transform if transform is not None else get_transform(split)
-        self._inner = _BikitDataset(
-            name="dacl1k",
-            split=split,
-            cache_dir=data_root,
-            img_type="pil",
-            return_type="np",
+    """dacl10k bridge segmentation dataset (19 classes, pixel-level masks)."""
+
+    def __init__(self, split: str, data_root: str = "data/dacl10k") -> None:
+        from dacl10k.dacl10kdataset import Dacl10kDataset
+
+        dacl_split = {"val": "validation"}.get(split, split)
+        self._inner = Dacl10kDataset(
+            split=dacl_split,
+            path_to_data=data_root,
+            resize_img=(512, 512),
+            resize_mask=(512, 512),
+            normalize_img=True,
         )
-        self._class_names: List[str] = self._inner.class_names
 
     def __len__(self) -> int:
         return len(self._inner)
 
     def __getitem__(self, idx: int) -> dict:
-        img_np, label = self._inner[idx]
-        img_tensor = self.transform(image=img_np)["image"]
-
-        damage = torch.zeros(_N_BRIDGE, dtype=torch.float32)
-        for i, cls_name in enumerate(self._class_names):
-            if cls_name in _BRIDGE_CLASSES:
-                damage[_BRIDGE_CLASSES.index(cls_name)] = float(label[i])
-
+        img, mask = self._inner[idx]   # img: (3,512,512), mask: (19,512,512) float
         return {
-            "image": img_tensor,
-            "domain": torch.tensor(1, dtype=torch.long),
-            "damage": damage,
+            "image": img,
+            "domain": torch.tensor(1),
+            "mask": mask.float(),
         }
 
 
@@ -155,6 +149,8 @@ class RoadDataset(Dataset):
 
 
 class CombinedDamageDataset:
+    """Road-only dataset for the MTL road classifier."""
+
     def __init__(
         self,
         split: str,
@@ -162,20 +158,9 @@ class CombinedDamageDataset:
         transform: Optional[A.Compose] = None,
     ) -> None:
         tfm = transform if transform is not None else get_transform(split)
-
         self.road_ds = RoadDataset(split=split, transform=tfm, data_root=data_root)
-        self.bridge_ds = BridgeDataset(split=split, transform=tfm, data_root=data_root)
-
-        self._dataset = ConcatDataset([self.road_ds, self.bridge_ds])
-
-        n_road = len(self.road_ds)
-        n_bridge = len(self.bridge_ds)
-
-        bridge_w = n_road / n_bridge
-        self._weights = torch.tensor(
-            [1.0] * n_road + [bridge_w] * n_bridge,
-            dtype=torch.double,
-        )
+        self._dataset = self.road_ds
+        self._weights = torch.ones(len(self.road_ds), dtype=torch.double)
 
     def __len__(self) -> int:
         return len(self._dataset)
