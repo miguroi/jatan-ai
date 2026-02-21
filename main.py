@@ -2,17 +2,17 @@ import argparse
 import sys
 import os
 
-from bikit.utils import download_dataset
 from loguru import logger
 
 
 def cmd_download(args: argparse.Namespace) -> None:
-    """Download dacl1k (bridge) and RDD2022 (road) datasets."""
+    """Download RDD2022 (road) dataset. dacl10k auto-downloads on first BridgeDataset init."""
     data_root: str = args.data_root
 
-    logger.info("Downloading dacl1k (bridge dataset)")
-    download_dataset("dacl1k", cache_dir=data_root)
-    logger.success("dacl1k ready.")
+    logger.info(
+        "dacl10k (bridge dataset) will be downloaded automatically on first "
+        "`uv run main.py train --task bridge-seg` run via dacl10k-toolkit."
+    )
 
     logger.info("Downloading RDD2022 (road dataset)")
     rdd_root = os.path.join(data_root, "rdd2022")
@@ -45,20 +45,34 @@ def _download_rdd2022(dest_dir: str, kaggle_dataset: str) -> None:
 def cmd_train(args: argparse.Namespace) -> None:
     import torch
     from src.model import JatanMTL
-    from src.trainer import Trainer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Training on {}", device)
     model = JatanMTL().to(device)
-    trainer = Trainer(
-        model,
-        device,
-        data_root=args.data_root,
-        batch_size=args.batch_size,
-        epochs1=args.epochs1,
-        epochs2=args.epochs2,
-    )
-    trainer.run()
+
+    if args.task == "road":
+        from src.trainer import Trainer
+        trainer = Trainer(
+            model,
+            device,
+            data_root=args.data_root,
+            batch_size=args.batch_size,
+            epochs1=args.epochs1,
+            epochs2=args.epochs2,
+        )
+        trainer.run()
+
+    elif args.task == "bridge-seg":
+        from src.trainer import BridgeSegTrainer
+        trainer = BridgeSegTrainer(
+            model,
+            device,
+            data_root=args.data_root,
+            batch_size=args.batch_size,
+            epochs1=args.epochs1,
+            epochs2=args.epochs2,
+        )
+        trainer.run()
 
 
 def cmd_eval(args: argparse.Namespace) -> None:
@@ -94,10 +108,8 @@ def cmd_eval(args: argparse.Namespace) -> None:
     logger.info(
         "Evaluation Results\n"
         "  val_loss:         {:.4f}\n"
-        "  bridge_macro_f1:  {:.4f}\n"
         "  road_macro_f1:    {:.4f}",
         metrics["val_loss"],
-        metrics["bridge_macro_f1"],
         metrics["road_macro_f1"],
     )
 
@@ -132,7 +144,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
     model = JatanMTL().to(device)
 
     ckpt = torch.load(args.checkpoint, map_location=device)
-    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    model.load_state_dict(ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt, strict=False)
     logger.info("Loaded checkpoint from {}", args.checkpoint)
 
     model.eval()
@@ -147,8 +159,12 @@ def cmd_infer(args: argparse.Namespace) -> None:
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
+    bridge_tfm = transforms.Compose([
+        transforms.Resize((512, 512)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
 
-    classes = _BRIDGE_CLASSES if args.domain == "bridge" else _ROAD_CLASSES
     image_paths = args.image_paths
 
     per_image = []
@@ -158,57 +174,83 @@ def cmd_infer(args: argparse.Namespace) -> None:
     for image_path in image_paths:
         img = Image.open(image_path).convert("RGB")
 
-        # Classification
-        x_cls = cls_tfm(img).unsqueeze(0).to(device)
-        with torch.no_grad():
-            logits = model(x_cls, args.domain)
-            probs = torch.sigmoid(logits)[0].cpu().tolist()
+        if args.domain == "bridge":
+            x_seg = bridge_tfm(img).unsqueeze(0).to(device)
+            with torch.no_grad():
+                out = model.segment_bridge(x_seg)
 
-        damage_classes = {
-            cls_name: round(prob, 4)
-            for cls_name, prob in zip(classes, probs)
+            presence_mask = out["presence"][0].cpu()                    # [19]
+            probs_map     = out["probs"][0].cpu()                       # [19, 512, 512]
+            total_pixels  = probs_map.shape[1] * probs_map.shape[2]
+
+            detected_classes = [
+                _BRIDGE_CLASSES[i] for i, p in enumerate(presence_mask.tolist()) if p
+            ]
+            coverage = {
+                _BRIDGE_CLASSES[i]: round(float((probs_map[i] > 0.5).sum()) / total_pixels * 100, 2)
+                for i in range(len(_BRIDGE_CLASSES))
+            }
+
+            per_image.append({
+                "image":   image_path,
+                "domain":  "bridge",
+                "bridge_seg": {
+                    "presence": detected_classes,
+                    "coverage": coverage,
+                },
+            })
+
+        else:  # road
+            x_cls = cls_tfm(img).unsqueeze(0).to(device)
+            with torch.no_grad():
+                logits = model(x_cls, "road")
+                probs  = torch.sigmoid(logits)[0].cpu().tolist()
+
+            damage_classes = {
+                cls_name: round(prob, 4)
+                for cls_name, prob in zip(_ROAD_CLASSES, probs)
+            }
+            detected = [c for c, p in damage_classes.items() if p >= args.threshold]
+
+            x_seg = seg_tfm(img).unsqueeze(0).to(device)
+            with torch.no_grad():
+                out = model.segment(x_seg)
+
+            seg_map = out["seg_map"][0].cpu().numpy()
+            severity_score = float(out["severity"][0].cpu())
+            passability = out["passability"][0]
+
+            total_pixels = seg_map.size
+            seg_pixel_pct = {
+                cls_name: round(int((seg_map == i).sum()) / total_pixels * 100, 2)
+                for i, cls_name in enumerate(EIDSEG_CLASSES)
+            }
+
+            all_severities.append(severity_score)
+            all_passability.append(passability)
+
+            per_image.append({
+                "image":        image_path,
+                "domain":       "road",
+                "damage":       damage_classes,
+                "detected":     detected,
+                "severity":     {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
+                "passability":  passability,
+                "segmentation": seg_pixel_pct,
+            })
+
+    if args.domain == "road" and all_severities:
+        agg_severity_score = max(all_severities)
+        agg_passability = _aggregate_passability(all_passability)
+        result = {
+            "images":    per_image,
+            "aggregate": {
+                "severity":    {"score": round(agg_severity_score, 4), "label": _severity_label(agg_severity_score)},
+                "passability": agg_passability,
+            },
         }
-        detected = [c for c, p in damage_classes.items() if p >= args.threshold]
-
-        # Segmentation + passability
-        x_seg = seg_tfm(img).unsqueeze(0).to(device)
-        with torch.no_grad():
-            out = model.segment(x_seg)
-
-        seg_map = out["seg_map"][0].cpu().numpy()
-        severity_score = float(out["severity"][0].cpu())
-        passability = out["passability"][0]
-
-        total_pixels = seg_map.size
-        seg_pixel_pct = {
-            cls_name: round(int((seg_map == i).sum()) / total_pixels * 100, 2)
-            for i, cls_name in enumerate(EIDSEG_CLASSES)
-        }
-
-        all_severities.append(severity_score)
-        all_passability.append(passability)
-
-        per_image.append({
-            "image":        image_path,
-            "domain":       args.domain,
-            "damage":       damage_classes,
-            "detected":     detected,
-            "severity":     {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
-            "passability":  passability,
-            "segmentation": seg_pixel_pct,
-        })
-
-    # Aggregate across all images
-    agg_severity_score = max(all_severities)
-    agg_passability = _aggregate_passability(all_passability)
-
-    result = {
-        "images":    per_image,
-        "aggregate": {
-            "severity":    {"score": round(agg_severity_score, 4), "label": _severity_label(agg_severity_score)},
-            "passability": agg_passability,
-        },
-    }
+    else:
+        result = {"images": per_image}
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -221,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # download
-    p_dl = sub.add_parser("download", help="Download dacl1k and RDD2022 datasets")
+    p_dl = sub.add_parser("download", help="Download RDD2022 dataset (dacl10k auto-downloads)")
     p_dl.add_argument(
         "--data-root",
         default="data/raw",
@@ -235,17 +277,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_dl.set_defaults(func=cmd_download)
 
     # train
-    p_tr = sub.add_parser("train", help="Train the MTL model")
+    p_tr = sub.add_parser("train", help="Train the model")
+    p_tr.add_argument(
+        "--task",
+        choices=["road", "bridge-seg"],
+        default="road",
+        help="Training task: 'road' (ResNet50 road classifier) or 'bridge-seg' (SegFormer-B2 dacl10k)",
+    )
     p_tr.add_argument("--batch-size", type=int, default=32)
     p_tr.add_argument("--epochs1",    type=int, default=10,
-                      help="Epochs for frozen-backbone phase")
+                      help="Epochs for frozen-backbone/encoder phase")
     p_tr.add_argument("--epochs2",    type=int, default=20,
                       help="Epochs for full fine-tune phase")
-    p_tr.add_argument("--data-root",  default="data/raw")
+    p_tr.add_argument("--data-root",  default="data/raw",
+                      help="Data root (use data/dacl10k for bridge-seg)")
     p_tr.set_defaults(func=cmd_train)
 
     # eval
-    p_ev = sub.add_parser("eval", help="Evaluate on validation set")
+    p_ev = sub.add_parser("eval", help="Evaluate road model on validation set")
     p_ev.add_argument("--data-root",   default="data/raw")
     p_ev.add_argument("--batch-size",  type=int, default=32)
     p_ev.add_argument("--checkpoint",  default="checkpoints/best_model.pt",
@@ -259,11 +308,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--domain",
         choices=["bridge", "road"],
         default="bridge",
-        help="Domain for damage classification (default: bridge)",
+        help="Domain: 'bridge' (dacl10k seg) or 'road' (RDD2022 cls + EIDSeg)",
     )
-    p_in.add_argument("--checkpoint", default="checkpoints/best_model.pt")
+    p_in.add_argument("--checkpoint", default="checkpoints/best_model.pt",
+                      help="Road model checkpoint (ignored for bridge domain)")
     p_in.add_argument("--threshold",  type=float, default=0.5,
-                      help="Sigmoid threshold for classification (default: 0.5)")
+                      help="Sigmoid threshold for road classification (default: 0.5)")
     p_in.set_defaults(func=cmd_infer)
 
     return parser

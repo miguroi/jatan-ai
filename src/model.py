@@ -8,6 +8,10 @@ _SEG_PRETRAINED = "nvidia/segformer-b5-finetuned-ade-640-640"
 _DEPTH_PRETRAINED = "Intel/dpt-large"
 _N_SEG_CLASSES = 6
 
+_BRIDGE_SEG_PRETRAINED = "nvidia/mit-b2"
+_BRIDGE_SEG_CHECKPOINT = "checkpoints/bridge_seg_best.pt"
+_N_BRIDGE_SEG_CLASSES = 19
+
 _DS_WEIGHT = 0.65
 
 _PASSABILITY_BISA  = 0.6   # configurable: clear fraction above which all vehicles can pass
@@ -17,13 +21,17 @@ _PASSABILITY_RODA2 = 0.2   # configurable: clear fraction above which motorcycle
 class JatanMTL(nn.Module):
     """Multi-task learning model for road and bridge damage detection.
 
-    Uses separate task heads for bridge (dacl1k) and road (RDD2022) damage types.
-    Shared backbone learns general damage features across domains.
+    Uses a road head for RDD2022 road damage types and a separate SegFormer-B2
+    for bridge damage segmentation (dacl10k, 19 classes).
     A frozen SegFormer-B5 + frozen DPT provide depth-weighted damage severity
-    segmentation for any input image (paper Eq. 1).
+    segmentation for road images (paper Eq. 1).
     """
 
-    def __init__(self, seg_checkpoint: str = _SEG_CHECKPOINT) -> None:
+    def __init__(
+        self,
+        seg_checkpoint: str = _SEG_CHECKPOINT,
+        bridge_seg_checkpoint: str = _BRIDGE_SEG_CHECKPOINT,
+    ) -> None:
         super().__init__()
 
         base = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
@@ -33,13 +41,6 @@ class JatanMTL(nn.Module):
             nn.Linear(2048, 1024),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
-        )
-
-        self.bridge_head = nn.Sequential(
-            nn.Linear(1024, 512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(512, 6),
         )
 
         self.road_head = nn.Sequential(
@@ -54,6 +55,8 @@ class JatanMTL(nn.Module):
 
         self.depth_model = self._load_depth_model()
         self.freeze_depth_model()
+
+        self.bridge_seg_model = self._load_bridge_seg_model(bridge_seg_checkpoint)
 
     @staticmethod
     def _load_seg_model(checkpoint_path: str):
@@ -82,6 +85,22 @@ class JatanMTL(nn.Module):
 
         return DPTForDepthEstimation.from_pretrained(_DEPTH_PRETRAINED)
 
+    @staticmethod
+    def _load_bridge_seg_model(checkpoint_path: str):
+        import os
+        from transformers import SegformerForSemanticSegmentation
+
+        model = SegformerForSemanticSegmentation.from_pretrained(
+            _BRIDGE_SEG_PRETRAINED,
+            num_labels=_N_BRIDGE_SEG_CLASSES,
+            ignore_mismatched_sizes=True,
+        )
+        if os.path.exists(checkpoint_path):
+            state_dict = torch.load(checkpoint_path, map_location="cpu")
+            if isinstance(state_dict, dict) and "model_state_dict" in state_dict:
+                state_dict = state_dict["model_state_dict"]
+            model.load_state_dict(state_dict, strict=False)
+        return model
 
     def freeze_backbone(self) -> None:
         for p in self.backbone.parameters():
@@ -107,26 +126,37 @@ class JatanMTL(nn.Module):
         for p in self.depth_model.parameters():
             p.requires_grad = True
 
+    def freeze_bridge_seg_encoder(self) -> None:
+        for p in self.bridge_seg_model.segformer.parameters():
+            p.requires_grad = False
+
+    def unfreeze_bridge_seg_encoder(self) -> None:
+        for p in self.bridge_seg_model.segformer.parameters():
+            p.requires_grad = True
+
 
     def forward(self, x: torch.Tensor, domain: str) -> torch.Tensor:
         """
         Args:
             x: [B, 3, 384, 384]
-            domain: "bridge" or "road"
+            domain: "road" (bridge now uses segment_bridge())
 
         Returns:
-            damage logits [B, 6] for bridge or [B, 5] for road
+            damage logits [B, 5] for road
         """
         feats = self.backbone(x)
         feats = feats.flatten(1)
         shared = self.shared_fc(feats)
 
-        if domain == "bridge":
-            return self.bridge_head(shared)
-        elif domain == "road":
+        if domain == "road":
             return self.road_head(shared)
+        elif domain == "bridge":
+            raise ValueError(
+                "Bridge classification is no longer supported via forward(). "
+                "Use model.segment_bridge(x) for bridge damage segmentation."
+            )
         else:
-            raise ValueError(f"Invalid domain: {domain}. Must be 'bridge' or 'road'")
+            raise ValueError(f"Invalid domain: {domain}. Must be 'road'")
 
 
     def segment(self, x: torch.Tensor) -> dict:
@@ -163,6 +193,26 @@ class JatanMTL(nn.Module):
             "severity":    self.compute_severity(seg_map, depth_map),
             "passability": self.compute_passability(seg_map, depth_map),
         }
+
+    def segment_bridge(self, x: torch.Tensor) -> dict:
+        """Run SegFormer-B2 bridge segmentation (dacl10k, 19 classes).
+
+        Args:
+            x: [B, 3, H, W]
+
+        Returns:
+            seg_logits: [B, 19, 512, 512]
+            probs:      [B, 19, 512, 512]  per-pixel sigmoid probabilities
+            presence:   [B, 19]            bool — class detected if max prob > 0.5
+        """
+        x_resized = F.interpolate(x, size=(512, 512), mode="bilinear", align_corners=False)
+        out = self.bridge_seg_model(pixel_values=x_resized)
+        seg_logits = F.interpolate(
+            out.logits, size=(512, 512), mode="bilinear", align_corners=False
+        )
+        probs = torch.sigmoid(seg_logits)             # [B, 19, 512, 512]
+        presence = probs.amax(dim=(2, 3)) > 0.5       # [B, 19]
+        return {"seg_logits": seg_logits, "probs": probs, "presence": presence}
 
     @staticmethod
     def _normalize_depth(depth: torch.Tensor) -> torch.Tensor:

@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "albumentations>=2.0.8",
-    "building-inspection-toolkit",
+    "dacl10k-toolkit",
     "dataset-tools",
     "kaggle>=1.6",
     "loguru>=0.7",
@@ -20,4 +20,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-building-inspection-toolkit = { git = "https://github.com/phiyodr/building-inspection-toolkit.git" }
+dacl10k-toolkit = { git = "https://github.com/phiyodr/dacl10k-toolkit.git" }
