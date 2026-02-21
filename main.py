@@ -476,7 +476,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # train-vlm
     p_tv = sub.add_parser("train-vlm",
-                          help="LoRA-finetune Qwen2-VL-2B-Instruct on bridge annotations")
+                          help="LoRA-finetune Qwen3-VL-2B-Instruct on bridge annotations")
     p_tv.add_argument("--annotations",  default="data/vlm_annotations.jsonl",
                       help="Path to JSONL annotations (default: data/vlm_annotations.jsonl)")
     p_tv.add_argument("--output-dir",   default="checkpoints/vlm_lora",
@@ -495,7 +495,7 @@ def build_parser() -> argparse.ArgumentParser:
                              help="RISE-R1 GRPO RL refinement on CoT-annotated data (run via torchrun)")
     p_grpo.add_argument("--annotations",       default="data/vlm_cot_annotations.jsonl",
                         help="CoT JSONL from generate-annotations --cot (default: data/vlm_cot_annotations.jsonl)")
-    p_grpo.add_argument("--model-name",        default="Qwen/Qwen2-VL-2B-Instruct")
+    p_grpo.add_argument("--model-name",        default="Qwen/Qwen3-VL-2B-Instruct")
     p_grpo.add_argument("--base-adapter",      default=None,
                         help="Path to CoT SFT LoRA adapter from train-vlm --cot (Stage 2 output)")
     p_grpo.add_argument("--output-dir",        default="checkpoints/vlm_lora/grpo")

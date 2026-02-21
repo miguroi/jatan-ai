@@ -62,12 +62,12 @@ class BridgeVLMInference:
     def __init__(
         self,
         adapter_path: str,
-        base_model: str = "Qwen/Qwen2-VL-2B-Instruct",
+        base_model: str = "Qwen/Qwen3-VL-2B-Instruct",
         device: Optional[str] = None,
         max_new_tokens: int = 256,
     ) -> None:
         from peft import PeftModel
-        from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+        from transformers import AutoModelForImageTextToText, AutoProcessor
 
         self.max_new_tokens = max_new_tokens
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -75,7 +75,7 @@ class BridgeVLMInference:
         self.processor = AutoProcessor.from_pretrained(
             adapter_path, trust_remote_code=True
         )
-        base = Qwen2VLForConditionalGeneration.from_pretrained(
+        base = AutoModelForImageTextToText.from_pretrained(
             base_model,
             torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
             device_map="auto",
@@ -241,12 +241,12 @@ class RoadVLMInference:
     def __init__(
         self,
         adapter_path: str,
-        base_model: str = "Qwen/Qwen2-VL-2B-Instruct",
+        base_model: str = "Qwen/Qwen3-VL-2B-Instruct",
         device: Optional[str] = None,
         max_new_tokens: int = 256,
     ) -> None:
         from peft import PeftModel
-        from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+        from transformers import AutoModelForImageTextToText, AutoProcessor
 
         self.max_new_tokens = max_new_tokens
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -254,7 +254,7 @@ class RoadVLMInference:
         self.processor = AutoProcessor.from_pretrained(
             adapter_path, trust_remote_code=True
         )
-        base = Qwen2VLForConditionalGeneration.from_pretrained(
+        base = AutoModelForImageTextToText.from_pretrained(
             base_model,
             torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
             device_map="auto",
