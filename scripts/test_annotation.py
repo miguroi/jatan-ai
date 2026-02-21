@@ -115,6 +115,7 @@ def test_bridge(args: argparse.Namespace) -> None:
         _section("STEP 2 — Image source")
         try:
             img = generator._get_raw_image(dataset, sample_idx)
+            logger.info("    path   : {}", generator._get_image_path(dataset, sample_idx))
             logger.info("    size   : {}  mode : {}", img.size, img.mode)
         except Exception as exc:
             logger.error("    ERROR loading image: {}", exc)
@@ -210,11 +211,11 @@ def test_road(args: argparse.Namespace) -> None:
 
         # ── Step 2: image path ────────────────────────────────────────────
         _section("STEP 2 — Image source")
-        image_path = dataset._samples[sample_idx]
-        logger.info("    path : {}", image_path)
+        image_path = generator._get_image_path(dataset, sample_idx)
+        logger.info("    path   : {}", image_path)
         try:
             img = Image.open(image_path).convert("RGB")
-            logger.info("    size : {}  mode : {}", img.size, img.mode)
+            logger.info("    size   : {}  mode : {}", img.size, img.mode)
         except Exception as exc:
             logger.error("    ERROR loading image: {}", exc)
             continue

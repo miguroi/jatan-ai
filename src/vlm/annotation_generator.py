@@ -212,6 +212,52 @@ class AnnotationGenerator:
         # Final fallback: denormalize from dataset item
         return _denormalize(dataset[idx]["image"])
 
+    def _get_image_path(self, dataset: BridgeDataset, idx: int) -> str:
+        """Get the image file path for the given dataset index."""
+        inner = dataset._inner
+
+        if hasattr(inner, "image_files"):
+            try:
+                return str(inner.image_files[idx])
+            except Exception:
+                pass
+
+        if hasattr(inner, "samples"):
+            try:
+                s = inner.samples[idx]
+                path = s[0] if isinstance(s, (tuple, list)) else s
+                return str(path)
+            except Exception:
+                pass
+
+        return f"<unknown index {idx}>"
+        """3-tier fallback to obtain a PIL Image for the given dataset index."""
+        inner = dataset._inner
+
+        # Tier 1: image_files attribute
+        if hasattr(inner, "image_files"):
+            try:
+                return Image.open(inner.image_files[idx]).convert("RGB")
+            except Exception:
+                pass
+
+        # Tier 2: samples attribute
+        if hasattr(inner, "samples"):
+            try:
+                s = inner.samples[idx]
+                path = s[0] if isinstance(s, (tuple, list)) else s
+                return Image.open(path).convert("RGB")
+            except Exception:
+                pass
+
+        # Tier 3: denormalize prefetched tensor
+        if getattr(inner, "use_prefetched_data", False) and inner.prefetched_data is not None:
+            img_tensor, _ = inner.prefetched_data[idx]
+            return _denormalize(img_tensor)
+
+        # Final fallback: denormalize from dataset item
+        return _denormalize(dataset[idx]["image"])
+
     def _image_to_base64(self, img: Image.Image) -> str:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=90)
@@ -408,6 +454,10 @@ class RoadAnnotationGenerator:
         self.max_retries   = max_retries
         self.retry_delay   = retry_delay
         self.request_delay = request_delay
+
+    def _get_image_path(self, dataset, idx: int) -> str:
+        """Get the image file path for the given dataset index."""
+        return str(dataset._samples[idx])
 
     def _load_existing_ids(self) -> set[str]:
         existing: set[str] = set()
