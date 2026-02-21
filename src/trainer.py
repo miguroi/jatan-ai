@@ -268,7 +268,7 @@ class BridgeSegTrainer:
         epochs2: int = 20,
         checkpoint_dir: str = "checkpoints",
         patience: int = 5,
-        num_workers: int = 0,
+        num_workers: int = min(4, os.cpu_count() or 1),
     ) -> None:
         self.model = model
         self.device = device
@@ -292,7 +292,7 @@ class BridgeSegTrainer:
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=False,
+            pin_memory=True,
             collate_fn=custom_collate_fn,
         )
         self._val_loader = DataLoader(
@@ -300,7 +300,7 @@ class BridgeSegTrainer:
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=False,
+            pin_memory=True,
             collate_fn=custom_collate_fn,
         )
 
