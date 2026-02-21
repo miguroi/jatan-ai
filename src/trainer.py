@@ -424,7 +424,9 @@ class BridgeSegTrainer:
                 targets = masks
                 inter   = (preds * targets).sum(dim=(2, 3))
                 union   = ((preds + targets) > 0).float().sum(dim=(2, 3))
-                miou    = (inter / union.clamp(min=1e-8)).mean()
+                present = union > 0
+                iou     = inter[present] / union[present]
+                miou    = iou.mean() if present.any() else torch.tensor(0.0, device=self.device)
 
                 running_loss += loss.item()
                 running_miou += miou.item()
