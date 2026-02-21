@@ -64,6 +64,9 @@ def test_bridge(args: argparse.Namespace) -> None:
         AnnotationGenerator,
         _build_annotation_prompt,
         _extract_defect_metadata,
+        _compute_severity_score,
+        _severity_label,
+        _passability_from_severity,
     )
 
     logger.info(f"\n{'═' * 72}")
@@ -112,13 +115,21 @@ def test_bridge(args: argparse.Namespace) -> None:
             logger.error("    ERROR loading image: {}", exc)
             continue
 
-        # ── Step 3: prompt ────────────────────────────────────────────────
-        _section("STEP 3 — Prompt sent to API")
-        prompt = _build_annotation_prompt(detections)
+        # ── Step 3: severity, passability, prompt ─────────────────────────
+        _section("STEP 3 — Severity & Passability")
+        severity_score = _compute_severity_score(detections)
+        passability    = _passability_from_severity(severity_score)
+        severity_label = _severity_label(severity_score)
+        logger.info("    severity score : {:.2f} / 1.0", severity_score)
+        logger.info("    severity label : {}", severity_label)
+        logger.info("    passability    : {}", passability)
+
+        _section("STEP 4 — Prompt sent to API")
+        prompt = _build_annotation_prompt(detections, severity_score, passability)
         _wrapped(prompt)
 
-        # ── Step 4: API response ──────────────────────────────────────────
-        _section("STEP 4 — Model response")
+        # ── Step 5: API response ──────────────────────────────────────────
+        _section("STEP 5 — Model response")
         try:
             logger.info("Calling API (this may take 10-30s)...")
             report = generator._call_api(img, prompt)
@@ -144,6 +155,9 @@ def test_road(args: argparse.Namespace) -> None:
         RoadAnnotationGenerator,
         _ROAD_DAMAGE_NAMES,
         _build_road_annotation_prompt,
+        _compute_road_severity_score,
+        _severity_label,
+        _passability_from_severity,
     )
     from PIL import Image
 
@@ -195,13 +209,21 @@ def test_road(args: argparse.Namespace) -> None:
             logger.error("    ERROR loading image: {}", exc)
             continue
 
-        # ── Step 3: prompt ────────────────────────────────────────────────
-        _section("STEP 3 — Prompt sent to API")
-        prompt = _build_road_annotation_prompt(detected_names)
+        # ── Step 3: severity, passability, prompt ─────────────────────────
+        _section("STEP 3 — Severity & Passability")
+        severity_score = _compute_road_severity_score(detected_codes)
+        passability    = _passability_from_severity(severity_score)
+        severity_label = _severity_label(severity_score)
+        logger.info("    severity score : {:.2f} / 1.0", severity_score)
+        logger.info("    severity label : {}", severity_label)
+        logger.info("    passability    : {}", passability)
+
+        _section("STEP 4 — Prompt sent to API")
+        prompt = _build_road_annotation_prompt(detected_names, severity_score, passability)
         _wrapped(prompt)
 
-        # ── Step 4: API response ──────────────────────────────────────────
-        _section("STEP 4 — Model response")
+        # ── Step 5: API response ──────────────────────────────────────────
+        _section("STEP 5 — Model response")
         try:
             logger.info("Calling API (this may take 10-30s)...")
             report = generator._call_api(img, prompt)
