@@ -56,10 +56,10 @@ class BridgeDataset(Dataset):
     def __init__(self, split: str, data_root: str = "data/dacl10k") -> None:
         from dacl10k.dacl10kdataset import Dacl10kDataset
 
-        dacl_split = {"val": "validation"}.get(split, split)
+        dacl_split = {"val": "valid"}.get(split, split)
         self._inner = Dacl10kDataset(
             split=dacl_split,
-            path_to_data=data_root,
+            data_path=data_root,
             resize_img=(512, 512),
             resize_mask=(512, 512),
             normalize_img=True,
