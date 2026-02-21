@@ -154,7 +154,7 @@ class GRPOVLMTrainer:
     def __init__(
         self,
         annotations_path: str = "data/vlm_cot_annotations.jsonl",
-        model_name: str = "Qwen/Qwen2-VL-2B-Instruct",
+        model_name: str = "Qwen/Qwen3-VL-2B-Instruct",
         base_adapter: str | None = None,
         output_dir: str = "checkpoints/vlm_lora/grpo",
         num_generations: int = 8,
@@ -186,12 +186,12 @@ class GRPOVLMTrainer:
         import torch
         from peft import LoraConfig, TaskType, get_peft_model
         from peft import PeftModel
-        from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+        from transformers import AutoModelForImageTextToText, AutoProcessor
         from trl import GRPOConfig, GRPOTrainer
 
         # ── Load model ──────────────────────────────────────────────────
         logger.info("Loading base model: {}", self.model_name)
-        model = Qwen2VLForConditionalGeneration.from_pretrained(
+        model = AutoModelForImageTextToText.from_pretrained(
             self.model_name,
             torch_dtype=torch.bfloat16,
             attn_implementation="flash_attention_2",
@@ -305,7 +305,7 @@ class GRPOVLMTrainer:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="RISE-R1 GRPO trainer for Qwen2-VL")
     p.add_argument("--annotations",    default="data/vlm_cot_annotations.jsonl")
-    p.add_argument("--model-name",     default="Qwen/Qwen2-VL-2B-Instruct")
+    p.add_argument("--model-name",     default="Qwen/Qwen3-VL-2B-Instruct")
     p.add_argument("--base-adapter",   default=None,
                    help="Path to CoT SFT LoRA adapter (Stage 2 output)")
     p.add_argument("--output-dir",     default="checkpoints/vlm_lora/grpo")

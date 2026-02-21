@@ -17,7 +17,7 @@ class VLMTrainer:
     def __init__(
         self,
         annotations_path: str = "data/vlm_annotations.jsonl",
-        model_name: str = "Qwen/Qwen2-VL-2B-Instruct",
+        model_name: str = "Qwen/Qwen3-VL-2B-Instruct",
         output_dir: str = "checkpoints/vlm_lora",
         batch_size: int = 4,
         grad_accum: int = 4,
@@ -42,7 +42,7 @@ class VLMTrainer:
 
     def run(self) -> None:
         from peft import LoraConfig, TaskType, get_peft_model
-        from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+        from transformers import AutoModelForImageTextToText, AutoProcessor
         from trl import SFTConfig, SFTTrainer
 
         from src.vlm.dataset import VLMDataset
@@ -52,7 +52,7 @@ class VLMTrainer:
         processor = AutoProcessor.from_pretrained(
             self.model_name, trust_remote_code=True
         )
-        model = Qwen2VLForConditionalGeneration.from_pretrained(
+        model = AutoModelForImageTextToText.from_pretrained(
             self.model_name,
             torch_dtype="auto",
             device_map="auto",
