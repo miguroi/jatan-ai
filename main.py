@@ -154,6 +154,7 @@ def cmd_generate_annotations(args: argparse.Namespace) -> None:
             max_retries=args.max_retries,
             retry_delay=args.retry_delay,
             request_delay=args.request_delay,
+            cot=args.cot,
         )
     else:
         from src.vlm.annotation_generator import RoadAnnotationGenerator
@@ -167,6 +168,7 @@ def cmd_generate_annotations(args: argparse.Namespace) -> None:
             max_retries=args.max_retries,
             retry_delay=args.retry_delay,
             request_delay=args.request_delay,
+            cot=args.cot,
         )
     generator.run()
 
@@ -181,6 +183,27 @@ def cmd_train_vlm(args: argparse.Namespace) -> None:
         grad_accum=args.grad_accum,
         epochs=args.epochs,
         lr=args.lr,
+        cot=args.cot,
+    )
+    trainer.run()
+
+
+def cmd_train_vlm_grpo(args: argparse.Namespace) -> None:
+    from src.vlm.grpo_trainer import GRPOVLMTrainer
+
+    trainer = GRPOVLMTrainer(
+        annotations_path=args.annotations,
+        model_name=args.model_name,
+        base_adapter=args.base_adapter,
+        output_dir=args.output_dir,
+        num_generations=args.num_generations,
+        max_prompt_length=args.max_prompt_length,
+        max_new_tokens=args.max_new_tokens,
+        per_device_batch_size=args.batch_size,
+        grad_accum=args.grad_accum,
+        learning_rate=args.lr,
+        max_steps=args.max_steps,
+        save_steps=args.save_steps,
     )
     trainer.run()
 
@@ -447,6 +470,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Base retry delay in seconds (doubles on each attempt)")
     p_ga.add_argument("--request-delay", type=float, default=1.0,
                       help="Sleep between successful requests in seconds (default: 1.0)")
+    p_ga.add_argument("--cot", action="store_true",
+                      help="Generate chain-of-thought reasoning traces (<think>...</think> + annotation)")
     p_ga.set_defaults(func=cmd_generate_annotations)
 
     # train-vlm
@@ -461,7 +486,29 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Gradient accumulation steps (default: 4)")
     p_tv.add_argument("--epochs",       type=int,   default=3)
     p_tv.add_argument("--lr",           type=float, default=5e-5)
+    p_tv.add_argument("--cot",          action="store_true",
+                      help="Train with CoT reasoning traces (requires --cot annotations)")
     p_tv.set_defaults(func=cmd_train_vlm)
+
+    # train-vlm-grpo
+    p_grpo = sub.add_parser("train-vlm-grpo",
+                             help="RISE-R1 GRPO RL refinement on CoT-annotated data (run via torchrun)")
+    p_grpo.add_argument("--annotations",       default="data/vlm_cot_annotations.jsonl",
+                        help="CoT JSONL from generate-annotations --cot (default: data/vlm_cot_annotations.jsonl)")
+    p_grpo.add_argument("--model-name",        default="Qwen/Qwen2-VL-2B-Instruct")
+    p_grpo.add_argument("--base-adapter",      default=None,
+                        help="Path to CoT SFT LoRA adapter from train-vlm --cot (Stage 2 output)")
+    p_grpo.add_argument("--output-dir",        default="checkpoints/vlm_lora/grpo")
+    p_grpo.add_argument("--num-generations",   type=int, default=8,
+                        help="GRPO rollouts per prompt (default: 8, matches RISE config)")
+    p_grpo.add_argument("--max-prompt-length", type=int, default=1024)
+    p_grpo.add_argument("--max-new-tokens",    type=int, default=512)
+    p_grpo.add_argument("--batch-size",        type=int, default=1)
+    p_grpo.add_argument("--grad-accum",        type=int, default=2)
+    p_grpo.add_argument("--lr",                type=float, default=2e-6)
+    p_grpo.add_argument("--max-steps",         type=int, default=200)
+    p_grpo.add_argument("--save-steps",        type=int, default=10)
+    p_grpo.set_defaults(func=cmd_train_vlm_grpo)
 
     return parser
 

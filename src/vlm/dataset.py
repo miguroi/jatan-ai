@@ -26,9 +26,11 @@ class VLMDataset(Dataset):
         split: str = "train",
         val_fraction: float = 0.1,
         image_size: int = 512,
+        cot: bool = False,
     ) -> None:
         self.processor  = processor
         self.image_size = image_size
+        self.cot        = cot
 
         records: list[dict] = []
         with open(annotations_path) as f:
@@ -64,8 +66,14 @@ class VLMDataset(Dataset):
             img = Image.new("RGB", (self.image_size, self.image_size), color=(128, 128, 128))
 
         # ── Build chat messages ──────────────────────────────────────────
-        human_text    = record["conversations"][0]["value"].replace("<image>\n", "")
+        human_text     = record["conversations"][0]["value"].replace("<image>\n", "")
         assistant_text = record["conversations"][1]["value"]
+
+        # In CoT mode, prepend the reasoning trace to the assistant turn
+        if self.cot and record.get("cot_reasoning"):
+            assistant_text = (
+                f"<think>\n{record['cot_reasoning']}\n</think>\n{assistant_text}"
+            )
 
         messages = [
             {
