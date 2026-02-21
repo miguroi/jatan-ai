@@ -11,17 +11,15 @@ is grounded and not hallucinating:
 
 Usage:
   # Bridge (dacl10k)
-  python scripts/test_annotation.py \
-    --domain bridge \
-    --data-root data/dacl10k \
-    --api-key "$OPENROUTER_API_KEY" \
+  python scripts/test_annotation.py \\
+    --domain bridge \\
+    --data-root data/dacl10k \\
     --n-samples 2
 
   # Road (RDD2022)
-  python scripts/test_annotation.py \
-    --domain road \
-    --data-root data/raw \
-    --api-key "$OPENROUTER_API_KEY" \
+  python scripts/test_annotation.py \\
+    --domain road \\
+    --data-root data/raw \\
     --n-samples 2
 """
 from __future__ import annotations
@@ -33,6 +31,7 @@ import textwrap
 from pathlib import Path
 
 from dotenv import load_dotenv
+from loguru import logger
 
 # Allow running from repo root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -44,9 +43,9 @@ load_dotenv()
 
 def _section(title: str) -> None:
     width = 72
-    print(f"\n{'─' * width}")
-    print(f"  {title}")
-    print(f"{'─' * width}")
+    logger.info(f"\n{'─' * width}")
+    logger.info(f"  {title}")
+    logger.info(f"{'─' * width}")
 
 
 def _wrapped(text: str, indent: int = 4) -> None:
@@ -54,7 +53,7 @@ def _wrapped(text: str, indent: int = 4) -> None:
     for line in text.splitlines():
         wrapped = textwrap.fill(line, width=80, initial_indent=prefix,
                                 subsequent_indent=prefix)
-        print(wrapped if wrapped.strip() else "")
+        logger.info(wrapped if wrapped.strip() else "")
 
 
 # ── Bridge test ───────────────────────────────────────────────────────────────
@@ -67,13 +66,16 @@ def test_bridge(args: argparse.Namespace) -> None:
         _extract_defect_metadata,
     )
 
-    print(f"\n{'═' * 72}")
-    print("  BRIDGE ANNOTATION TEST")
-    print(f"  model : {args.model}")
-    print(f"  split : {args.split}  |  n_samples : {args.n_samples}")
-    print(f"{'═' * 72}")
+    logger.info(f"\n{'═' * 72}")
+    logger.info("  BRIDGE ANNOTATION TEST")
+    logger.info("  model : {}", args.model)
+    logger.info("  split : {}  |  n_samples : {}", args.split, args.n_samples)
+    logger.info(f"{'═' * 72}")
 
+    logger.info("Loading BridgeDataset from {} (split={})", args.data_root, args.split)
     dataset = BridgeDataset(split=args.split, data_root=args.data_root)
+    logger.success("BridgeDataset loaded: {} images", len(dataset))
+
     generator = AnnotationGenerator(
         data_root=args.data_root,
         api_key=args.api_key,
@@ -82,9 +84,9 @@ def test_bridge(args: argparse.Namespace) -> None:
     )
 
     for sample_idx in range(min(args.n_samples, len(dataset))):
-        print(f"\n\n{'█' * 72}")
-        print(f"  SAMPLE {sample_idx + 1} / {args.n_samples}")
-        print(f"{'█' * 72}")
+        logger.info(f"\n\n{'█' * 72}")
+        logger.info("  SAMPLE {} / {}", sample_idx + 1, args.n_samples)
+        logger.info(f"{'█' * 72}")
 
         item = dataset[sample_idx]
         mask = item["mask"].numpy()  # (19, H, W)
@@ -93,21 +95,21 @@ def test_bridge(args: argparse.Namespace) -> None:
         _section("STEP 1 — Detected defects (from segmentation mask)")
         detections = _extract_defect_metadata(mask, _BRIDGE_CLASSES)
         if not detections:
-            print("    (none — all-zero mask)")
+            logger.info("    (none — all-zero mask)")
         for d in detections:
             flag = " [STRUCTURAL]" if d["structural"] else ""
-            print(f"    • {d['class']:<20}{flag}")
-            print(f"      coverage : {d['coverage_pct']:.2f}%")
-            print(f"      region   : {d['region']}")
-            print(f"      pixels   : {d['pixel_area']}")
+            logger.info(f"    • {d['class']:<20}{flag}")
+            logger.info("      coverage : {:.2f}%", d['coverage_pct'])
+            logger.info("      region   : {}", d['region'])
+            logger.info("      pixels   : {}", d['pixel_area'])
 
         # ── Step 2: raw image path ────────────────────────────────────────
         _section("STEP 2 — Image source")
         try:
             img = generator._get_raw_image(dataset, sample_idx)
-            print(f"    size   : {img.size}  mode : {img.mode}")
+            logger.info("    size   : {}  mode : {}", img.size, img.mode)
         except Exception as exc:
-            print(f"    ERROR loading image: {exc}")
+            logger.error("    ERROR loading image: {}", exc)
             continue
 
         # ── Step 3: prompt ────────────────────────────────────────────────
@@ -118,10 +120,12 @@ def test_bridge(args: argparse.Namespace) -> None:
         # ── Step 4: API response ──────────────────────────────────────────
         _section("STEP 4 — Model response")
         try:
+            logger.info("Calling API (this may take 10-30s)...")
             report = generator._call_api(img, prompt)
             _wrapped(report)
+            logger.success("API call complete")
         except Exception as exc:
-            print(f"    ERROR calling API: {exc}")
+            logger.error("    ERROR calling API: {}", exc)
             continue
 
         # ── Grounding check hint ──────────────────────────────────────────
@@ -129,7 +133,7 @@ def test_bridge(args: argparse.Namespace) -> None:
         for d in detections:
             mentioned = d["class"].lower() in report.lower()
             tick = "✓" if mentioned else "✗ (not mentioned)"
-            print(f"    {tick}  {d['class']}")
+            logger.info("    {}  {}", tick, d['class'])
 
 
 # ── Road test ─────────────────────────────────────────────────────────────────
@@ -143,13 +147,16 @@ def test_road(args: argparse.Namespace) -> None:
     )
     from PIL import Image
 
-    print(f"\n{'═' * 72}")
-    print("  ROAD ANNOTATION TEST")
-    print(f"  model : {args.model}")
-    print(f"  split : {args.split}  |  n_samples : {args.n_samples}")
-    print(f"{'═' * 72}")
+    logger.info(f"\n{'═' * 72}")
+    logger.info("  ROAD ANNOTATION TEST")
+    logger.info("  model : {}", args.model)
+    logger.info("  split : {}  |  n_samples : {}", args.split, args.n_samples)
+    logger.info(f"{'═' * 72}")
 
+    logger.info("Loading RoadDataset from {} (split={})", args.data_root, args.split)
     dataset = RoadDataset(split=args.split, data_root=args.data_root)
+    logger.success("RoadDataset loaded: {} images", len(dataset))
+
     generator = RoadAnnotationGenerator(
         data_root=args.data_root,
         api_key=args.api_key,
@@ -158,9 +165,9 @@ def test_road(args: argparse.Namespace) -> None:
     )
 
     for sample_idx in range(min(args.n_samples, len(dataset))):
-        print(f"\n\n{'█' * 72}")
-        print(f"  SAMPLE {sample_idx + 1} / {args.n_samples}")
-        print(f"{'█' * 72}")
+        logger.info(f"\n\n{'█' * 72}")
+        logger.info("  SAMPLE {} / {}", sample_idx + 1, args.n_samples)
+        logger.info(f"{'█' * 72}")
 
         item = dataset[sample_idx]
         damage = item["damage"].numpy()  # (5,)
@@ -173,19 +180,19 @@ def test_road(args: argparse.Namespace) -> None:
         ]
         detected_names = [_ROAD_DAMAGE_NAMES[c] for c in detected_codes]
         if not detected_codes:
-            print("    (no damage — NoDefect)")
+            logger.info("    (no damage — NoDefect)")
         for code, name in zip(detected_codes, detected_names):
-            print(f"    • {code}  →  {name}")
+            logger.info("    • {}  →  {}", code, name)
 
         # ── Step 2: image path ────────────────────────────────────────────
         _section("STEP 2 — Image source")
         image_path = dataset._samples[sample_idx]
-        print(f"    path : {image_path}")
+        logger.info("    path : {}", image_path)
         try:
             img = Image.open(image_path).convert("RGB")
-            print(f"    size : {img.size}  mode : {img.mode}")
+            logger.info("    size : {}  mode : {}", img.size, img.mode)
         except Exception as exc:
-            print(f"    ERROR loading image: {exc}")
+            logger.error("    ERROR loading image: {}", exc)
             continue
 
         # ── Step 3: prompt ────────────────────────────────────────────────
@@ -196,10 +203,12 @@ def test_road(args: argparse.Namespace) -> None:
         # ── Step 4: API response ──────────────────────────────────────────
         _section("STEP 4 — Model response")
         try:
+            logger.info("Calling API (this may take 10-30s)...")
             report = generator._call_api(img, prompt)
             _wrapped(report)
+            logger.success("API call complete")
         except Exception as exc:
-            print(f"    ERROR calling API: {exc}")
+            logger.error("    ERROR calling API: {}", exc)
             continue
 
         # ── Grounding check ───────────────────────────────────────────────
@@ -208,7 +217,7 @@ def test_road(args: argparse.Namespace) -> None:
             keyword = name.split()[0].lower()  # e.g. "longitudinal", "pothole"
             mentioned = keyword in report.lower()
             tick = "✓" if mentioned else "✗ (not mentioned)"
-            print(f"    {tick}  {name}")
+            logger.info("    {}  {}", tick, name)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -235,8 +244,9 @@ def main() -> None:
     if not args.api_key:
         args.api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not args.api_key:
-        print("ERROR: No API key found. Set OPENROUTER_API_KEY in .env or pass --api-key.")
+        logger.error("No API key found. Set OPENROUTER_API_KEY in .env or pass --api-key.")
         sys.exit(1)
+
     if args.domain == "bridge":
         test_bridge(args)
     else:
