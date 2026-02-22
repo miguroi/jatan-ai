@@ -188,6 +188,7 @@ class AnnotationGenerator:
         retry_delay: float = 5.0,
         request_delay: float = 1.0,
         cot: bool = False,
+        max_samples: int | None = None,
     ) -> None:
         self.data_root     = data_root
         self.output_path   = output_path
@@ -199,6 +200,7 @@ class AnnotationGenerator:
         self.retry_delay   = retry_delay
         self.request_delay = request_delay
         self.cot           = cot
+        self.max_samples   = max_samples
 
     # ------------------------------------------------------------------
     # Helpers
@@ -368,8 +370,17 @@ class AnnotationGenerator:
         dataset = BridgeDataset(split=self.split, data_root=self.data_root)
         logger.info("Dataset size: {} images (split={})", len(dataset), self.split)
 
+        if self.max_samples is not None:
+            logger.info("max_samples={} (including {} already written)", self.max_samples, len(existing_ids))
+
+        n_written = len(existing_ids)
+
         with open(self.output_path, "a") as out_f:
             for idx in range(len(dataset)):
+                if self.max_samples is not None and n_written >= self.max_samples:
+                    logger.info("Reached max_samples={} — stopping.", self.max_samples)
+                    break
+
                 record_id = f"{self.split}_{idx:06d}"
                 if record_id in existing_ids:
                     continue
@@ -427,13 +438,15 @@ class AnnotationGenerator:
                     record["cot_reasoning"] = cot_reasoning
                 out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_f.flush()
+                n_written += 1
 
-                if (idx + 1) % 50 == 0:
-                    logger.info("Progress: {}/{}", idx + 1, len(dataset))
+                if n_written % 50 == 0:
+                    limit_str = f"/{self.max_samples}" if self.max_samples is not None else ""
+                    logger.info("Progress: {}{}", n_written, limit_str)
 
                 time.sleep(self.request_delay)
 
-        logger.success("Annotation generation complete. Output: {}", self.output_path)
+        logger.success("Annotation generation complete. {} annotations written. Output: {}", n_written, self.output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +553,7 @@ class RoadAnnotationGenerator:
         retry_delay: float = 5.0,
         request_delay: float = 1.0,
         cot: bool = False,
+        max_samples: int | None = None,
     ) -> None:
         self.data_root     = data_root
         self.output_path   = output_path
@@ -551,6 +565,7 @@ class RoadAnnotationGenerator:
         self.retry_delay   = retry_delay
         self.request_delay = request_delay
         self.cot           = cot
+        self.max_samples   = max_samples
 
     def _get_image_path(self, dataset, idx: int) -> str:
         """Get the image file path for the given dataset index."""
@@ -625,8 +640,15 @@ class RoadAnnotationGenerator:
         dataset = RoadDataset(split=self.split, data_root=self.data_root)
         logger.info("Road dataset size: {} images (split={})", len(dataset), self.split)
 
+        n_written = len(existing_ids)
+        limit_str = f"/{self.max_samples}" if self.max_samples is not None else ""
+
         with open(self.output_path, "a") as out_f:
             for idx in range(len(dataset)):
+                if self.max_samples is not None and n_written >= self.max_samples:
+                    logger.info("Reached max_samples={} — stopping.", self.max_samples)
+                    break
+
                 record_id = f"road_{self.split}_{idx:06d}"
                 if record_id in existing_ids:
                     continue
@@ -674,10 +696,11 @@ class RoadAnnotationGenerator:
                     record["cot_reasoning"] = cot_reasoning
                 out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_f.flush()
+                n_written += 1
 
-                if (idx + 1) % 100 == 0:
-                    logger.info("Progress: {}/{}", idx + 1, len(dataset))
+                if n_written % 100 == 0:
+                    logger.info("Progress: {}{}", n_written, limit_str)
 
                 time.sleep(self.request_delay)
 
-        logger.success("Road annotation generation complete. Output: {}", self.output_path)
+        logger.success("Road annotation generation complete. {} annotations written. Output: {}", n_written, self.output_path)

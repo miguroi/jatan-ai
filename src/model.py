@@ -14,8 +14,15 @@ _N_BRIDGE_SEG_CLASSES = 19
 
 _DS_WEIGHT = 0.65
 
-_PASSABILITY_BISA  = 0.6   # configurable: clear fraction above which all vehicles can pass
-_PASSABILITY_RODA2 = 0.2   # configurable: clear fraction above which motorcycles can pass
+_PASSABILITY_BISA  = 0.6   # road: clear fraction above which all vehicles can pass
+_PASSABILITY_RODA2 = 0.2   # road: clear fraction above which motorcycles can pass
+
+_BRIDGE_STRUCTURAL_CLASSES = {
+    "Crack", "ACrack", "Spalling", "ExposedRebars",
+    "Cavity", "Hollowareas", "Rockpocket",
+}
+_BRIDGE_PASSABILITY_BISA  = 0.3  # bridge: severity below this → all vehicles
+_BRIDGE_PASSABILITY_RODA2 = 0.6  # bridge: severity below this → motorcycles only
 
 
 class JatanMTL(nn.Module):
@@ -254,6 +261,35 @@ class JatanMTL(nn.Module):
             else:
                 result.append("Tidak Bisa")
         return result
+
+    @staticmethod
+    def compute_bridge_severity(detected_classes: list[str], coverage: dict[str, float]) -> float:
+        """Coverage-weighted structural severity score for bridge images.
+
+        Structural defects (cracks, spalling, exposed rebars, etc.) carry weight 1.0;
+        cosmetic defects (graffiti, weathering, etc.) carry weight 0.2.
+
+        score = Σ (weight × coverage_pct) / 100, clamped to [0, 1]
+        """
+        total = sum(
+            (1.0 if cls in _BRIDGE_STRUCTURAL_CLASSES else 0.2) * coverage.get(cls, 0.0)
+            for cls in detected_classes
+        )
+        return min(total / 100.0, 1.0)
+
+    @staticmethod
+    def compute_bridge_passability(severity_score: float) -> str:
+        """Map bridge severity score to transportation passability tier.
+
+        < 0.3  → Bisa      (all vehicles)
+        0.3–0.6 → Roda-2  (motorcycles only)
+        ≥ 0.6  → Tidak Bisa (impassable)
+        """
+        if severity_score < _BRIDGE_PASSABILITY_BISA:
+            return "Bisa"
+        elif severity_score < _BRIDGE_PASSABILITY_RODA2:
+            return "Roda-2"
+        return "Tidak Bisa"
 
     @staticmethod
     def compute_severity(seg_map: torch.Tensor, depth_map: torch.Tensor) -> torch.Tensor:

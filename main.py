@@ -155,6 +155,7 @@ def cmd_generate_annotations(args: argparse.Namespace) -> None:
             retry_delay=args.retry_delay,
             request_delay=args.request_delay,
             cot=args.cot,
+            max_samples=args.max_samples,
         )
     else:
         from src.vlm.annotation_generator import RoadAnnotationGenerator
@@ -169,6 +170,7 @@ def cmd_generate_annotations(args: argparse.Namespace) -> None:
             retry_delay=args.retry_delay,
             request_delay=args.request_delay,
             cot=args.cot,
+            max_samples=args.max_samples,
         )
     generator.run()
 
@@ -292,6 +294,12 @@ def cmd_infer(args: argparse.Namespace) -> None:
                 for i in range(len(_BRIDGE_CLASSES))
             }
 
+            severity_score = model.compute_bridge_severity(detected_classes, coverage)
+            passability    = model.compute_bridge_passability(severity_score)
+
+            all_severities.append(severity_score)
+            all_passability.append(passability)
+
             entry: dict = {
                 "image":   image_path,
                 "domain":  "bridge",
@@ -299,10 +307,15 @@ def cmd_infer(args: argparse.Namespace) -> None:
                     "presence": detected_classes,
                     "coverage": coverage,
                 },
+                "severity":    {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
+                "passability": passability,
             }
 
             if vlm is not None:
-                vlm_result = vlm.describe(img, probs_map, threshold=args.threshold)
+                vlm_result = vlm.describe(
+                    img, probs_map, severity_score, passability,
+                    threshold=args.threshold,
+                )
                 entry["reasoning"] = {
                     "report":   vlm_result["report"],
                     "detected": vlm_result["detected"],
@@ -361,7 +374,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
 
             per_image.append(road_entry)
 
-    if args.domain == "road" and all_severities:
+    if all_severities:
         agg_severity_score = max(all_severities)
         agg_passability = _aggregate_passability(all_passability)
         result = {
@@ -472,6 +485,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Sleep between successful requests in seconds (default: 1.0)")
     p_ga.add_argument("--cot", action="store_true",
                       help="Generate chain-of-thought reasoning traces (<think>...</think> + annotation)")
+    p_ga.add_argument("--max-samples", type=int, default=None,
+                      help="Stop after writing this many annotations (useful for limiting cost)")
     p_ga.set_defaults(func=cmd_generate_annotations)
 
     # train-vlm
