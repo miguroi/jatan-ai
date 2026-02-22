@@ -137,11 +137,19 @@ class BridgeVLMInference:
         self,
         detected_classes: list[str],
         coverage_map: dict[str, float],
+        severity_score: float,
+        passability: str,
     ) -> str:
+        severity_label = (
+            "Ringan" if severity_score < 0.2 else
+            "Sedang" if severity_score < 0.5 else
+            "Berat"
+        )
         if not detected_classes:
             return (
                 "You are a field assessor conducting emergency post-disaster structural triage. "
                 "Automated analysis of this bridge image detected no structural damage. "
+                f"Severity: {severity_label}. Passability: {passability}. "
                 "Provide a brief triage report confirming the bridge is safe to cross."
             )
         lines = [
@@ -156,9 +164,12 @@ class BridgeVLMInference:
             "Automated analysis detected the following bridge damage "
             "(colour overlays indicate affected areas):\n\n"
             f"{defect_summary}\n\n"
-            "Write a concise 2-3 sentence triage report describing the damage, its immediate "
-            "safety risk, and the access status. Use field-ready language "
-            "(e.g., 'do not cross', 'motorcycles only', 'proceed with caution', 'safe to cross')."
+            f"Severity: {severity_label} ({severity_score:.2f}). "
+            f"Passability: {passability}.\n\n"
+            "Write a 1-2 sentence triage report stating the immediate access status and action. "
+            "Use field-ready language "
+            "(e.g., 'do not cross', 'motorcycles only', 'proceed with caution', 'safe to cross'). "
+            "Be direct. Do not repeat the defect list verbatim."
         )
 
     # ------------------------------------------------------------------
@@ -170,15 +181,19 @@ class BridgeVLMInference:
         self,
         image: Image.Image,
         seg_probs: torch.Tensor,
+        severity_score: float,
+        passability: str,
         threshold: float = 0.5,
     ) -> dict:
         """
         Full post-segmentation reasoning pipeline.
 
         Args:
-            image:     original PIL image.
-            seg_probs: (19, H, W) float tensor from SegFormer.
-            threshold: probability threshold for class detection.
+            image:         original PIL image.
+            seg_probs:     (19, H, W) float tensor from SegFormer.
+            severity_score: float severity score from compute_bridge_severity().
+            passability:   passability tier string from compute_bridge_passability().
+            threshold:     probability threshold for class detection.
 
         Returns:
             {"report": str, "detected": list[str], "overlay_image": PIL.Image}
@@ -193,7 +208,7 @@ class BridgeVLMInference:
             for i in range(len(_BRIDGE_CLASSES))
         }
 
-        prompt = self._build_inference_prompt(detected, coverage_map)
+        prompt = self._build_inference_prompt(detected, coverage_map, severity_score, passability)
 
         messages = [
             {
