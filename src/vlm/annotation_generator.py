@@ -110,21 +110,24 @@ def _build_annotation_prompt(
     passability: str,
     cot: bool = False,
 ) -> str:
-    """Build annotation prompt with severity and passability context."""
+    """Build annotation prompt with post-disaster emergency triage context."""
     if not detections:
         if cot:
             return (
-                "This bridge image shows no visible defects. "
+                "You are a field assessor conducting emergency post-disaster structural triage. "
+                "Automated analysis of this bridge image detected no structural damage. "
                 "Severity: Ringan (0.0). Passability: Bisa.\n\n"
-                "Think step by step through the image, then write a 1-2 sentence expert inspection report. "
+                "Think step by step through the visible structural condition, then write a "
+                "1-2 sentence triage report for emergency response teams. "
                 "Format your response exactly as:\n"
                 "<think>\n[your step-by-step reasoning]\n</think>\n"
-                "[your final 1-2 sentence report]"
+                "[your final 1-2 sentence triage report]"
             )
         return (
-            "This bridge image shows no visible defects. "
+            "You are a field assessor conducting emergency post-disaster structural triage. "
+            "Automated analysis of this bridge image detected no structural damage. "
             "Severity: Ringan (0.0). Passability: Bisa. "
-            "Write a 1-2 sentence expert inspection report confirming no defects are observed."
+            "Write a 1-2 sentence triage report confirming the bridge is safe to cross."
         )
 
     lines = []
@@ -139,28 +142,34 @@ def _build_annotation_prompt(
 
     if cot:
         return (
-            "You are a licensed bridge structural engineer conducting a visual inspection. "
-            "The following defects have been detected by automated segmentation:\n\n"
+            "You are a field assessor conducting emergency post-disaster structural triage. "
+            "Your report will be used by emergency response teams to make immediate "
+            "access and evacuation decisions. "
+            "Automated analysis detected the following bridge damage:\n\n"
             f"{defect_list}\n\n"
             f"Severity: {severity_label} ({severity_score:.2f}). "
             f"Passability: {passability}.\n\n"
-            "Think step by step: assess each defect, its structural significance, "
-            "and the overall condition. Then write a 1-2 sentence actionable inspection report.\n\n"
+            "Think step by step: assess each damage type for immediate safety risk, "
+            "consider load-bearing implications, and determine the access status. "
+            "Then write a 1-2 sentence triage report.\n\n"
             "Format your response exactly as:\n"
             "<think>\n[your step-by-step reasoning]\n</think>\n"
-            "[your final 1-2 sentence report with recommended action]"
+            "[your final 1-2 sentence triage report with immediate access recommendation "
+            "(e.g., 'do not cross', 'motorcycles only', 'proceed with caution', 'safe to cross')]"
         )
 
     return (
-        "You are a licensed bridge structural engineer conducting a visual inspection. "
-        "The following defects have been detected by automated segmentation:\n\n"
+        "You are a field assessor conducting emergency post-disaster structural triage. "
+        "Your report will be used by emergency response teams to make immediate "
+        "access and evacuation decisions. "
+        "Automated analysis detected the following bridge damage:\n\n"
         f"{defect_list}\n\n"
         f"Severity: {severity_label} ({severity_score:.2f}). "
         f"Passability: {passability}.\n\n"
-        "Write a 1-2 sentence, actionable inspection report. "
-        "Describe the observed damage and state the recommended action "
-        "(e.g., 'immediate closure', 'schedule repair', 'monitor'). "
-        "Be direct and concise. Do not repeat the defect list verbatim."
+        "Write a 1-2 sentence triage report stating the immediate access status and action. "
+        "Use field-ready language "
+        "(e.g., 'do not cross', 'motorcycles only', 'proceed with caution', 'safe to cross'). "
+        "Be direct. Do not repeat the defect list verbatim."
     )
 
 
@@ -461,49 +470,58 @@ def _build_road_annotation_prompt(
     passability: str,
     cot: bool = False,
 ) -> str:
-    """Build an expert prompt for road damage annotation."""
+    """Build a post-disaster emergency triage prompt for road damage annotation."""
     if not detected_names:
         if cot:
             return (
-                "This road image shows no visible damage. "
+                "You are a field assessor conducting emergency post-disaster road triage. "
+                "Automated analysis of this road image detected no damage. "
                 f"Severity: Ringan ({0.0:.2f}). Passability: Bisa.\n\n"
-                "Think step by step through the road surface condition, then write a 1-2 sentence report. "
+                "Think step by step through the road surface condition, then write a "
+                "1-2 sentence triage report for emergency response teams. "
                 "Format your response exactly as:\n"
                 "<think>\n[your step-by-step reasoning]\n</think>\n"
-                "[your final 1-2 sentence report]"
+                "[your final 1-2 sentence triage report]"
             )
         return (
-            "This road image shows no visible damage. "
+            "You are a field assessor conducting emergency post-disaster road triage. "
+            "Automated analysis of this road image detected no damage. "
             f"Severity: Ringan ({0.0:.2f}). Passability: Bisa. "
-            "Write a 1-2 sentence expert road condition report confirming no defects are observed."
+            "Write a 1-2 sentence triage report confirming the road is passable."
         )
     damage_list = "\n".join(f"- {name}" for name in detected_names)
     severity_label = _severity_label(severity_score)
 
     if cot:
         return (
-            "You are a licensed road infrastructure engineer conducting a pavement condition survey. "
-            "The following damage types have been detected in this road image:\n\n"
+            "You are a field assessor conducting emergency post-disaster road triage. "
+            "Your report will be used by emergency response teams to make immediate "
+            "routing and evacuation decisions. "
+            "Automated analysis detected the following road damage:\n\n"
             f"{damage_list}\n\n"
             f"Severity: {severity_label} ({severity_score:.2f}). "
             f"Passability: {passability}.\n\n"
-            "Think step by step: assess each damage type, its severity contribution, "
-            "and the overall road condition. Then write a 1-2 sentence actionable report.\n\n"
+            "Think step by step: assess each damage type for immediate safety risk, "
+            "consider vehicle load implications, and determine the access status. "
+            "Then write a 1-2 sentence triage report.\n\n"
             "Format your response exactly as:\n"
             "<think>\n[your step-by-step reasoning]\n</think>\n"
-            "[your final 1-2 sentence report with recommended action]"
+            "[your final 1-2 sentence triage report with immediate routing recommendation "
+            "(e.g., 'road closed', 'motorcycles only', 'avoid heavy vehicles', 'passable')]"
         )
 
     return (
-        "You are a licensed road infrastructure engineer conducting a pavement condition survey. "
-        "The following damage types have been detected in this road image:\n\n"
+        "You are a field assessor conducting emergency post-disaster road triage. "
+        "Your report will be used by emergency response teams to make immediate "
+        "routing and evacuation decisions. "
+        "Automated analysis detected the following road damage:\n\n"
         f"{damage_list}\n\n"
         f"Severity: {severity_label} ({severity_score:.2f}). "
         f"Passability: {passability}.\n\n"
-        "Write a 1-2 sentence, actionable condition report. "
-        "State the recommended action based on severity and passability "
-        "(e.g., 'close to heavy vehicles', 'patch within 48h', 'monitor'). "
-        "Be direct and concise."
+        "Write a 1-2 sentence triage report stating the immediate routing status and action. "
+        "Use field-ready language "
+        "(e.g., 'road closed', 'motorcycles only', 'avoid heavy vehicles', 'passable'). "
+        "Be direct. Do not repeat the damage list verbatim."
     )
 
 

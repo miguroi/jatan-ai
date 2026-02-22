@@ -140,21 +140,25 @@ class BridgeVLMInference:
     ) -> str:
         if not detected_classes:
             return (
-                "This bridge image shows no detected defects from automated segmentation. "
-                "Provide a brief expert assessment confirming the apparent structural integrity."
+                "You are a field assessor conducting emergency post-disaster structural triage. "
+                "Automated analysis of this bridge image detected no structural damage. "
+                "Provide a brief triage report confirming the bridge is safe to cross."
             )
         lines = [
-            f"- {cls}: {coverage_map.get(cls, 0.0):.2f}% image coverage"
+            f"- {cls}: {coverage_map.get(cls, 0.0):.2f}% coverage"
             for cls in detected_classes
         ]
         defect_summary = "\n".join(lines)
         return (
-            "You are a licensed bridge structural engineer. "
-            "Automated segmentation has detected the following defects in this bridge image "
-            "(colour overlays indicate defect locations):\n\n"
+            "You are a field assessor conducting emergency post-disaster structural triage. "
+            "Your report will be used by emergency response teams to make immediate "
+            "access and evacuation decisions. "
+            "Automated analysis detected the following bridge damage "
+            "(colour overlays indicate affected areas):\n\n"
             f"{defect_summary}\n\n"
-            "Write a concise 3-5 sentence expert inspection report describing the observed "
-            "defects, their likely structural implications, and recommended next steps."
+            "Write a concise 2-3 sentence triage report describing the damage, its immediate "
+            "safety risk, and the access status. Use field-ready language "
+            "(e.g., 'do not cross', 'motorcycles only', 'proceed with caution', 'safe to cross')."
         )
 
     # ------------------------------------------------------------------
@@ -305,16 +309,16 @@ class RoadVLMInference:
         passability: str,
     ) -> str:
         severity_label = (
-            "minor" if severity_score < 0.2 else
-            "moderate" if severity_score < 0.5 else
-            "severe"
+            "Ringan" if severity_score < 0.2 else
+            "Sedang" if severity_score < 0.5 else
+            "Berat"
         )
         if not detected:
             return (
-                f"This road image shows no detected damage. "
-                f"Overall severity is assessed as {severity_label}; "
-                f"passability: {passability}. "
-                "Provide a brief expert assessment confirming the road condition."
+                "You are a field assessor conducting emergency post-disaster road triage. "
+                "Automated analysis of this road image detected no damage. "
+                f"Severity: {severity_label}. Passability: {passability}. "
+                "Provide a brief triage report confirming the road is passable."
             )
         lines = [
             f"- {_ROAD_DAMAGE_NAMES.get(cls, cls)}: confidence {damage_probs.get(cls, 0):.2f}"
@@ -322,15 +326,17 @@ class RoadVLMInference:
         ]
         damage_summary = "\n".join(lines)
         return (
-            "You are a licensed road infrastructure engineer. "
-            "Automated analysis has detected the following pavement damage "
+            "You are a field assessor conducting emergency post-disaster road triage. "
+            "Your report will be used by emergency response teams to make immediate "
+            "routing and evacuation decisions. "
+            "Automated analysis detected the following road damage "
             "(colour overlays indicate affected areas):\n\n"
             f"{damage_summary}\n\n"
-            f"Overall severity: {severity_label} (score {severity_score:.2f}). "
-            f"Assessed passability: {passability}.\n\n"
-            "Write a concise 3-5 sentence expert pavement condition report describing "
-            "the observed damage, its likely structural and safety implications, "
-            "and recommended maintenance priority and actions."
+            f"Severity: {severity_label} ({severity_score:.2f}). "
+            f"Passability: {passability}.\n\n"
+            "Write a concise 2-3 sentence triage report describing the damage, its immediate "
+            "safety risk, and the routing status. Use field-ready language "
+            "(e.g., 'road closed', 'motorcycles only', 'avoid heavy vehicles', 'passable')."
         )
 
     @torch.inference_mode()
