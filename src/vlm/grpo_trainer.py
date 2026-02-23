@@ -270,7 +270,7 @@ class GRPOVLMTrainer:
             save_steps=self.save_steps,
             save_total_limit=2,
             max_steps=self.max_steps,
-            report_to="none",
+            report_to="wandb",
             remove_unused_columns=False,
         )
 
