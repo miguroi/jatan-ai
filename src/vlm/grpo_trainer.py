@@ -26,6 +26,27 @@ from loguru import logger
 # Reward functions
 # ---------------------------------------------------------------------------
 
+def _to_text(completion) -> str:
+    """Extract plain text from a completion that may be a string or message-dict list."""
+    if isinstance(completion, str):
+        return completion
+    if isinstance(completion, list):
+        parts = []
+        for item in completion:
+            if isinstance(item, dict):
+                content = item.get("content", "")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            parts.append(c.get("text", ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return " ".join(parts)
+    return str(completion)
+
+
 def _extract_think(text: str) -> str:
     m = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
     return m.group(1).strip() if m else ""
@@ -38,6 +59,7 @@ def _extract_answer(text: str) -> str:
 
 def format_reward(completions: list[str], **_) -> list[float]:
     """1.0 if the completion contains <think>...</think> followed by non-empty answer."""
+    completions = [_to_text(c) for c in completions]
     scores = []
     for c in completions:
         has_think = bool(re.search(r"<think>.*?</think>", c, re.DOTALL))
@@ -64,6 +86,7 @@ def _normalise_passability(text: str) -> str | None:
 
 def passability_reward(completions: list[str], **kwargs) -> list[float]:
     """1.0 if the answer section predicts the correct passability tier."""
+    completions = [_to_text(c) for c in completions]
     targets = kwargs.get("target", [{} for _ in completions])
     scores = []
     for c, t in zip(completions, targets):
@@ -76,6 +99,7 @@ def passability_reward(completions: list[str], **kwargs) -> list[float]:
 
 def grounding_reward(completions: list[str], **kwargs) -> list[float]:
     """Recall of ground-truth defect class names mentioned anywhere in the completion."""
+    completions = [_to_text(c) for c in completions]
     targets = kwargs.get("target", [{} for _ in completions])
     scores = []
     for c, t in zip(completions, targets):
