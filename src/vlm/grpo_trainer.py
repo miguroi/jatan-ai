@@ -129,7 +129,7 @@ def load_grpo_dataset(annotations_path: str):
         problem = r["conversations"][0]["value"].replace("<image>\n", "")
 
         rows.append({
-            "problem":    problem,
+            "prompt":     problem,
             "image":      img,
             "image_path": image_path,
             "answer":     r["conversations"][1]["value"],
@@ -225,54 +225,6 @@ class GRPOVLMTrainer:
         eval_ds  = full_ds.select(range(len(full_ds) - n_val, len(full_ds)))
         logger.info("Train: {} | Eval: {}", len(train_ds), len(eval_ds))
 
-        # ── Collator: build multimodal prompt messages ───────────────────
-        def make_messages(example: dict) -> dict:
-            from PIL import Image as PILImage
-            img = example["image"]
-            if not isinstance(img, PILImage.Image):
-                img = PILImage.fromarray(img).convert("RGB")
-
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": img},
-                        {"type": "text",  "text": example["problem"]},
-                    ],
-                }
-            ]
-            text = processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            inputs = processor(
-                text=[text],
-                images=[img],
-                return_tensors="pt",
-                padding=True,
-            )
-            example["input_ids"]      = inputs["input_ids"][0]
-            example["attention_mask"] = inputs["attention_mask"][0]
-            pv = inputs.get("pixel_values")
-            if pv is not None:
-                example["pixel_values"] = pv[0]
-            return example
-
-        cache_dir  = os.path.join(self.output_dir, "tokenized_cache")
-        train_cache = os.path.join(cache_dir, "train")
-        eval_cache  = os.path.join(cache_dir, "eval")
-
-        if os.path.exists(train_cache) and os.path.exists(eval_cache):
-            from datasets import load_from_disk
-            logger.info("Loading tokenized datasets from cache: {}", cache_dir)
-            train_ds = load_from_disk(train_cache)
-            eval_ds  = load_from_disk(eval_cache)
-        else:
-            train_ds = train_ds.map(make_messages, desc="Tokenising train")
-            eval_ds  = eval_ds.map(make_messages,  desc="Tokenising eval")
-            os.makedirs(cache_dir, exist_ok=True)
-            train_ds.save_to_disk(train_cache)
-            eval_ds.save_to_disk(eval_cache)
-            logger.info("Tokenized datasets cached to: {}", cache_dir)
 
         # ── GRPOConfig ───────────────────────────────────────────────────
         grpo_config = GRPOConfig(
