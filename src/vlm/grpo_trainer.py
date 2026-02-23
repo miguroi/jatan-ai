@@ -194,8 +194,7 @@ class GRPOVLMTrainer:
         model = AutoModelForImageTextToText.from_pretrained(
             self.model_name,
             torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
-            device_map="auto",
+            attn_implementation="eager",
             trust_remote_code=True,
         )
 
@@ -258,14 +257,27 @@ class GRPOVLMTrainer:
                 example["pixel_values"] = pv[0]
             return example
 
-        train_ds = train_ds.map(make_messages, desc="Tokenising train")
-        eval_ds  = eval_ds.map(make_messages,  desc="Tokenising eval")
+        cache_dir  = os.path.join(self.output_dir, "tokenized_cache")
+        train_cache = os.path.join(cache_dir, "train")
+        eval_cache  = os.path.join(cache_dir, "eval")
+
+        if os.path.exists(train_cache) and os.path.exists(eval_cache):
+            from datasets import load_from_disk
+            logger.info("Loading tokenized datasets from cache: {}", cache_dir)
+            train_ds = load_from_disk(train_cache)
+            eval_ds  = load_from_disk(eval_cache)
+        else:
+            train_ds = train_ds.map(make_messages, desc="Tokenising train")
+            eval_ds  = eval_ds.map(make_messages,  desc="Tokenising eval")
+            os.makedirs(cache_dir, exist_ok=True)
+            train_ds.save_to_disk(train_cache)
+            eval_ds.save_to_disk(eval_cache)
+            logger.info("Tokenized datasets cached to: {}", cache_dir)
 
         # ── GRPOConfig ───────────────────────────────────────────────────
         grpo_config = GRPOConfig(
             output_dir=self.output_dir,
             num_generations=self.num_generations,
-            max_prompt_length=self.max_prompt_length,
             max_completion_length=self.max_new_tokens,
             per_device_train_batch_size=self.per_device_batch_size,
             gradient_accumulation_steps=self.grad_accum,
