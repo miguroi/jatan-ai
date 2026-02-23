@@ -269,13 +269,13 @@ class JatanMTL(nn.Module):
         Structural defects (cracks, spalling, exposed rebars, etc.) carry weight 1.0;
         cosmetic defects (graffiti, weathering, etc.) carry weight 0.2.
 
-        score = Σ (weight × coverage_pct) / 100, clamped to [0, 1]
+        score = Σ (weight × coverage_pct / 100), clamped to [0, 1]
         """
         total = sum(
             (1.0 if cls in _BRIDGE_STRUCTURAL_CLASSES else 0.2) * coverage.get(cls, 0.0)
             for cls in detected_classes
         )
-        return min(total / 100.0, 1.0)
+        return min(total / 100.0 * 5.0, 1.0)  # scale: 20% structural damage → severity 1.0
 
     @staticmethod
     def compute_bridge_passability(severity_score: float) -> str:

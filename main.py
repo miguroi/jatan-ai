@@ -210,6 +210,13 @@ def cmd_train_vlm_grpo(args: argparse.Namespace) -> None:
     trainer.run()
 
 
+def _pil_to_base64(img) -> str:
+    import base64, io
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 def cmd_infer(args: argparse.Namespace) -> None:
     import json
     import torch
@@ -290,7 +297,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
                 _BRIDGE_CLASSES[i] for i, p in enumerate(presence_mask.tolist()) if p
             ]
             coverage = {
-                _BRIDGE_CLASSES[i]: round(float((probs_map[i] > 0.5).sum()) / total_pixels * 100, 2)
+                _BRIDGE_CLASSES[i]: round(float((probs_map[i] > args.threshold).sum()) / total_pixels * 100, 2)
                 for i in range(len(_BRIDGE_CLASSES))
             }
 
@@ -317,8 +324,9 @@ def cmd_infer(args: argparse.Namespace) -> None:
                     threshold=args.threshold,
                 )
                 entry["reasoning"] = {
-                    "report":   vlm_result["report"],
-                    "detected": vlm_result["detected"],
+                    "report":        vlm_result["report"],
+                    "detected":      vlm_result["detected"],
+                    "overlay_image": _pil_to_base64(vlm_result["overlay_image"]),
                 }
 
             per_image.append(entry)
@@ -368,8 +376,9 @@ def cmd_infer(args: argparse.Namespace) -> None:
                     threshold=args.threshold,
                 )
                 road_entry["reasoning"] = {
-                    "report":   vlm_result["report"],
-                    "detected": vlm_result["detected"],
+                    "report":        vlm_result["report"],
+                    "detected":      vlm_result["detected"],
+                    "overlay_image": _pil_to_base64(vlm_result["overlay_image"]),
                 }
 
             per_image.append(road_entry)
