@@ -129,7 +129,15 @@ def load_grpo_dataset(annotations_path: str):
         problem = r["conversations"][0]["value"].replace("<image>\n", "")
 
         rows.append({
-            "prompt":     problem,
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": problem},
+                    ],
+                }
+            ],
             "image":      img,
             "image_path": image_path,
             "answer":     r["conversations"][1]["value"],
