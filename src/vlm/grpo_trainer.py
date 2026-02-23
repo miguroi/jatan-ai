@@ -62,8 +62,9 @@ def _normalise_passability(text: str) -> str | None:
     return None
 
 
-def passability_reward(completions: list[str], targets: list[dict], **_) -> list[float]:
+def passability_reward(completions: list[str], **kwargs) -> list[float]:
     """1.0 if the answer section predicts the correct passability tier."""
+    targets = kwargs.get("target", [{} for _ in completions])
     scores = []
     for c, t in zip(completions, targets):
         answer    = _extract_answer(c)
@@ -73,8 +74,9 @@ def passability_reward(completions: list[str], targets: list[dict], **_) -> list
     return scores
 
 
-def grounding_reward(completions: list[str], targets: list[dict], **_) -> list[float]:
+def grounding_reward(completions: list[str], **kwargs) -> list[float]:
     """Recall of ground-truth defect class names mentioned anywhere in the completion."""
+    targets = kwargs.get("target", [{} for _ in completions])
     scores = []
     for c, t in zip(completions, targets):
         defects: list[str] = t.get("defects", [])
@@ -88,14 +90,10 @@ def grounding_reward(completions: list[str], targets: list[dict], **_) -> list[f
     return scores
 
 
-def combined_reward(
-    completions: list[str],
-    targets: list[dict],
-    **kwargs,
-) -> list[float]:
-    fmt  = format_reward(completions)
-    pass_ = passability_reward(completions, targets)
-    grnd  = grounding_reward(completions, targets)
+def combined_reward(completions: list[str], **kwargs) -> list[float]:
+    fmt   = format_reward(completions)
+    pass_ = passability_reward(completions, **kwargs)
+    grnd  = grounding_reward(completions, **kwargs)
     return [
         f * (0.4 * p + 0.6 * g)
         for f, p, g in zip(fmt, pass_, grnd)
