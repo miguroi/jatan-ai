@@ -143,10 +143,10 @@ def _severity_label(score: float) -> str:
 def _aggregate_passability(labels: list[str]) -> str:
     """Safety-first (worst-case) aggregation across multiple images."""
     if "Tidak Bisa" in labels:
-        return _PASSABILITY_MAP["Tidak Bisa"]
+        return "Tidak Bisa"
     if "Roda-2" in labels:
-        return _PASSABILITY_MAP["Roda-2"]
-    return _PASSABILITY_MAP["Bisa"]
+        return "Roda-2"
+    return "Bisa"
 
 
 def cmd_generate_annotations(args: argparse.Namespace) -> None:
