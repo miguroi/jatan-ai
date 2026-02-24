@@ -90,42 +90,57 @@ def cmd_train(args: argparse.Namespace) -> None:
 
 
 def cmd_eval(args: argparse.Namespace) -> None:
+    import numpy as np
     import torch
-    from src.dataset import CombinedDamageDataset, get_transform
-    from src.model import JatanMTL
-    from src.trainer import Trainer
+    import torch.nn as nn
     from torch.utils.data import DataLoader
+    from tqdm import tqdm
+
+    from src.dataset import EIDSegDataset, _BRIDGE_CLASSES
+    from src.model import JatanMTL
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = JatanMTL().to(device)
+    model = JatanMTL(bridge_seg_checkpoint=args.checkpoint).to(device)
+    logger.info("Loaded checkpoint from {}", args.checkpoint)
 
-    checkpoint_path = getattr(args, "checkpoint", "checkpoints/best_model.pt")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    logger.info("Loaded checkpoint from {} (epoch {})", checkpoint_path, checkpoint["epoch"])
-
-    val_ds = CombinedDamageDataset(
-        split="val", data_root=args.data_root, transform=get_transform("val")
-    )
+    val_ds = EIDSegDataset(split="val", data_root=args.data_root)
     num_workers = min(4, os.cpu_count() or 1)
-
-    from src.trainer import custom_collate_fn
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True,
-        collate_fn=custom_collate_fn,
+        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=True,
     )
 
-    trainer = Trainer(model, device, data_root=args.data_root)
-    metrics = trainer.validate(val_loader)
+    ce = nn.CrossEntropyLoss(ignore_index=255)
+    model.bridge_seg_model.eval()
+    running_loss = 0.0
+    per_class_iou = [[] for _ in range(len(_BRIDGE_CLASSES))]
 
-    logger.info(
-        "Evaluation Results\n"
-        "  val_loss:         {:.4f}\n"
-        "  road_macro_f1:    {:.4f}",
-        metrics["val_loss"],
-        metrics["road_macro_f1"],
-    )
+    with torch.no_grad():
+        for batch in tqdm(val_loader, desc="Evaluating"):
+            images = batch["image"].to(device)
+            masks  = batch["mask"].to(device)
+            out    = model.segment_bridge(images)
+            loss   = ce(out["seg_logits"], masks)
+            running_loss += loss.item()
+
+            class_map = out["class_map"]
+            valid     = masks != 255
+            for c in range(len(_BRIDGE_CLASSES)):
+                pred_c   = (class_map == c) & valid
+                target_c = (masks == c) & valid
+                inter    = (pred_c & target_c).sum().float()
+                union    = (pred_c | target_c).sum().float()
+                if union > 0:
+                    per_class_iou[c].append((inter / union).item())
+
+    val_loss = running_loss / len(val_loader)
+    class_ious = [float(np.mean(iou)) if iou else 0.0 for iou in per_class_iou]
+    miou = float(np.mean(class_ious))
+
+    logger.info("Evaluation Results")
+    logger.info("  val_loss:  {:.4f}", val_loss)
+    logger.info("  mIoU:      {:.4f}", miou)
+    for cls, iou in zip(_BRIDGE_CLASSES, class_ious):
+        logger.info("  IoU [{}]: {:.4f}", cls, iou)
 
 
 _SEVERITY_MAP = {"Ringan": "minor", "Sedang": "moderate", "Berat": "severe"}
@@ -380,11 +395,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_tr.set_defaults(func=cmd_train)
 
     # eval
-    p_ev = sub.add_parser("eval", help="Evaluate road model on validation set")
-    p_ev.add_argument("--data-root",   default="data/raw")
-    p_ev.add_argument("--batch-size",  type=int, default=32)
-    p_ev.add_argument("--checkpoint",  default="checkpoints/best_model.pt",
-                      help="Path to checkpoint file (default: checkpoints/best_model.pt)")
+    p_ev = sub.add_parser("eval", help="Evaluate bridge segmenter on EIDSeg val split")
+    p_ev.add_argument("--data-root",  default="data/raw/eidseg")
+    p_ev.add_argument("--batch-size", type=int, default=16)
+    p_ev.add_argument("--checkpoint", default="checkpoints/bridge_seg_best.pt",
+                      help="Bridge segmenter checkpoint (default: checkpoints/bridge_seg_best.pt)")
     p_ev.set_defaults(func=cmd_eval)
 
     # infer
