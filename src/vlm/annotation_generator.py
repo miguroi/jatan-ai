@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 from PIL import Image
 
-from src.dataset import BridgeDataset, RoadDataset, _BRIDGE_CLASSES, _ROAD_CLASSES
+from src.dataset import BridgeDataset, EIDSegDataset, RoadDataset, _BRIDGE_CLASSES, _ROAD_CLASSES
 
 _ROAD_DAMAGE_NAMES: dict[str, str] = {
     "D00": "longitudinal crack",
@@ -704,3 +704,267 @@ class RoadAnnotationGenerator:
                 time.sleep(self.request_delay)
 
         logger.success("Road annotation generation complete. {} annotations written. Output: {}", n_written, self.output_path)
+
+
+# ---------------------------------------------------------------------------
+# EIDSeg annotation generator (bridge + road, unified 3-class pipeline)
+# ---------------------------------------------------------------------------
+
+def _build_eidseg_prompt(
+    detected: list[str],
+    coverage: dict[str, float],
+    severity_score: float,
+    passability: str,
+    cot: bool = False,
+) -> str:
+    """Build triage prompt matching the BridgeVLMInference inference prompt format."""
+    severity_label = (
+        "Ringan" if severity_score < 0.2 else
+        "Sedang" if severity_score < 0.5 else
+        "Berat"
+    )
+    if not detected:
+        if cot:
+            return (
+                "You are a field assessor conducting emergency post-disaster structural triage. "
+                "Automated analysis of this image detected no damage. "
+                f"Severity: {severity_label} (0.00). Passability: {passability}.\n\n"
+                "Think step by step through the visible condition, then write a "
+                "1-2 sentence triage report for emergency response teams. "
+                "Format your response exactly as:\n"
+                "<think>\n[your step-by-step reasoning]\n</think>\n"
+                "[your final 1-2 sentence triage report]"
+            )
+        return (
+            "You are a field assessor conducting emergency post-disaster structural triage. "
+            "Automated analysis of this image detected no damage. "
+            f"Severity: {severity_label} (0.00). Passability: {passability}. "
+            "Provide a brief triage report confirming the infrastructure is safe to use."
+        )
+
+    lines = [
+        f"- {cls}: {coverage.get(cls, 0.0):.2f}% coverage"
+        for cls in detected
+    ]
+    defect_summary = "\n".join(lines)
+
+    if cot:
+        return (
+            "You are a field assessor conducting emergency post-disaster structural triage. "
+            "Your report will be used by emergency response teams to make immediate "
+            "access and evacuation decisions. "
+            "Automated analysis detected the following damage "
+            "(colour overlays indicate affected areas):\n\n"
+            f"{defect_summary}\n\n"
+            f"Severity: {severity_label} ({severity_score:.2f}). "
+            f"Passability: {passability}.\n\n"
+            "Think step by step: assess the damage extent and immediate safety risk, "
+            "then determine the access status. "
+            "Format your response exactly as:\n"
+            "<think>\n[your step-by-step reasoning]\n</think>\n"
+            "[your final 1-2 sentence triage report with immediate access recommendation "
+            "(e.g., 'do not cross', 'motorcycles only', 'proceed with caution', 'safe to cross')]"
+        )
+
+    return (
+        "You are a field assessor conducting emergency post-disaster structural triage. "
+        "Your report will be used by emergency response teams to make immediate "
+        "access and evacuation decisions. "
+        "Automated analysis detected the following damage "
+        "(colour overlays indicate affected areas):\n\n"
+        f"{defect_summary}\n\n"
+        f"Severity: {severity_label} ({severity_score:.2f}). "
+        f"Passability: {passability}.\n\n"
+        "Write a 1-2 sentence triage report stating the immediate access status and action. "
+        "Use field-ready language "
+        "(e.g., 'do not cross', 'motorcycles only', 'proceed with caution', 'safe to cross'). "
+        "Be direct. Do not repeat the damage list verbatim."
+    )
+
+
+class EIDSegAnnotationGenerator:
+    """Generates VLM training annotations from EIDSeg ground-truth masks.
+
+    Uses 3-class labels (Undamaged/Damaged/Destroyed) matching the unified
+    inference pipeline. Works for both bridge and road domain images.
+    """
+
+    def __init__(
+        self,
+        data_root: str = "data/raw/eidseg",
+        output_path: str = "data/vlm_annotations_eidseg.jsonl",
+        api_key: str = "",
+        base_url: str = "https://openrouter.ai/api/v1",
+        model: str = "google/gemini-2.0-flash-001",
+        split: str = "train",
+        max_retries: int = 3,
+        retry_delay: float = 5.0,
+        request_delay: float = 1.0,
+        cot: bool = False,
+        max_samples: int | None = None,
+    ) -> None:
+        self.data_root     = data_root
+        self.output_path   = output_path
+        self.api_key       = api_key
+        self.base_url      = base_url
+        self.model         = model
+        self.split         = split
+        self.max_retries   = max_retries
+        self.retry_delay   = retry_delay
+        self.request_delay = request_delay
+        self.cot           = cot
+        self.max_samples   = max_samples
+
+    def _load_existing_ids(self) -> set[str]:
+        existing: set[str] = set()
+        if not os.path.exists(self.output_path):
+            return existing
+        with open(self.output_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    existing.add(json.loads(line)["id"])
+                except Exception:
+                    pass
+        return existing
+
+    def _image_to_base64(self, img: Image.Image) -> str:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    def _call_api(self, img: Image.Image, prompt: str) -> str:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        b64 = self._image_to_base64(img)
+        max_tokens = 1024 if self.cot else 512
+
+        for attempt in range(self.max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                                },
+                                {"type": "text", "text": prompt},
+                            ],
+                        }
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=0.3,
+                )
+                return response.choices[0].message.content.strip()
+            except Exception as exc:
+                if attempt < self.max_retries - 1:
+                    wait = self.retry_delay * (2 ** attempt)
+                    logger.warning(
+                        "API error (attempt {}/{}): {}. Retrying in {:.0f}s...",
+                        attempt + 1, self.max_retries, exc, wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
+
+    def run(self) -> None:
+        out_dir = os.path.dirname(self.output_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
+        existing_ids = self._load_existing_ids()
+        logger.info("Loaded {} existing annotations — resuming.", len(existing_ids))
+
+        dataset = EIDSegDataset(split=self.split, data_root=self.data_root)
+        logger.info("EIDSeg dataset size: {} images (split={})", len(dataset), self.split)
+
+        n_written = len(existing_ids)
+
+        with open(self.output_path, "a") as out_f:
+            for idx in range(len(dataset)):
+                if self.max_samples is not None and n_written >= self.max_samples:
+                    logger.info("Reached max_samples={} — stopping.", self.max_samples)
+                    break
+
+                record_id = f"eidseg_{self.split}_{idx:06d}"
+                if record_id in existing_ids:
+                    continue
+
+                sample     = dataset._samples[idx]
+                image_path = str(sample["image_path"])
+
+                item       = dataset[idx]
+                mask       = item["mask"]  # (H, W) long, values 0/1/2/255
+
+                # Coverage over valid (non-ignore) pixels
+                valid        = mask != 255
+                valid_pixels = int(valid.sum())
+                if valid_pixels == 0:
+                    continue
+
+                coverage = {
+                    cls: round(float((mask == i).sum()) / valid_pixels * 100, 2)
+                    for i, cls in enumerate(_BRIDGE_CLASSES)
+                }
+                detected = [
+                    cls for cls in ["Damaged", "Destroyed"] if coverage.get(cls, 0.0) > 0
+                ]
+                severity_score = min(
+                    coverage.get("Destroyed", 0.0) * 2.0 / 100
+                    + coverage.get("Damaged",   0.0) * 0.5 / 100,
+                    1.0,
+                )
+                passability = (
+                    "Bisa"       if severity_score < 0.3 else
+                    "Roda-2"     if severity_score < 0.6 else
+                    "Tidak Bisa"
+                )
+
+                prompt = _build_eidseg_prompt(detected, coverage, severity_score, passability, cot=self.cot)
+
+                try:
+                    img = Image.open(image_path).convert("RGB")
+                    raw = self._call_api(img, prompt)
+                except Exception as exc:
+                    logger.error("Failed at index {}: {}", idx, exc)
+                    continue
+
+                if self.cot:
+                    cot_reasoning, report = AnnotationGenerator._split_cot_response(raw)
+                else:
+                    cot_reasoning, report = "", raw
+
+                record: dict = {
+                    "id":          record_id,
+                    "image_path":  image_path,
+                    "defects":     detected,
+                    "severity":    round(severity_score, 4),
+                    "passability": passability,
+                    "conversations": [
+                        {"from": "human", "value": f"<image>\n{prompt}"},
+                        {"from": "gpt",   "value": report},
+                    ],
+                }
+                if self.cot and cot_reasoning:
+                    record["cot_reasoning"] = cot_reasoning
+
+                out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                out_f.flush()
+                n_written += 1
+
+                if n_written % 50 == 0:
+                    limit_str = f"/{self.max_samples}" if self.max_samples is not None else ""
+                    logger.info("Progress: {}{}", n_written, limit_str)
+
+                time.sleep(self.request_delay)
+
+        logger.success(
+            "EIDSeg annotation generation complete. {} annotations written. Output: {}",
+            n_written, self.output_path,
+        )
