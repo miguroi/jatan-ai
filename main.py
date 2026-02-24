@@ -302,7 +302,6 @@ def cmd_infer(args: argparse.Namespace) -> None:
 
         entry: dict = {
             "image":   image_path,
-            "domain":  args.domain,
             "seg": {
                 "presence": detected_classes,
                 "coverage": coverage,
@@ -390,12 +389,6 @@ def build_parser() -> argparse.ArgumentParser:
     # infer
     p_in = sub.add_parser("infer", help="Run inference on one or more images")
     p_in.add_argument("image_paths", nargs="+", help="Path(s) to input image(s)")
-    p_in.add_argument(
-        "--domain",
-        choices=["bridge", "road"],
-        default="bridge",
-        help="Domain label for output JSON (both use EIDSeg 3-class segmentation)",
-    )
     p_in.add_argument("--checkpoint", default="checkpoints/best_model.pt",
                       help="JatanMTL checkpoint (default: checkpoints/best_model.pt)")
     p_in.add_argument("--with-reasoning", action="store_true",
