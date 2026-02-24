@@ -100,7 +100,8 @@ def cmd_eval(args: argparse.Namespace) -> None:
     from src.model import JatanMTL
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = JatanMTL(bridge_seg_checkpoint=args.checkpoint).to(device)
+    model = JatanMTL(bridge_seg_checkpoint=args.checkpoint)
+    model.bridge_seg_model.eval().to(device)
     logger.info("Loaded checkpoint from {}", args.checkpoint)
 
     val_ds = EIDSegDataset(split="val", data_root=args.data_root)
@@ -109,20 +110,22 @@ def cmd_eval(args: argparse.Namespace) -> None:
         val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=True,
     )
 
+    import torch.nn.functional as F
     ce = nn.CrossEntropyLoss(ignore_index=255)
-    model.bridge_seg_model.eval()
     running_loss = 0.0
     per_class_iou = [[] for _ in range(len(_BRIDGE_CLASSES))]
+    bridge_seg = model.bridge_seg_model.to(device)
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Evaluating"):
             images = batch["image"].to(device)
             masks  = batch["mask"].to(device)
-            out    = model.segment_bridge(images)
-            loss   = ce(out["seg_logits"], masks)
+            out    = bridge_seg(pixel_values=images)
+            seg_logits = F.interpolate(out.logits, size=(512, 512), mode="bilinear", align_corners=False)
+            loss   = ce(seg_logits, masks)
             running_loss += loss.item()
 
-            class_map = out["class_map"]
+            class_map = seg_logits.argmax(dim=1)
             valid     = masks != 255
             for c in range(len(_BRIDGE_CLASSES)):
                 pred_c   = (class_map == c) & valid
