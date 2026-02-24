@@ -128,21 +128,25 @@ def cmd_eval(args: argparse.Namespace) -> None:
     )
 
 
+_SEVERITY_MAP = {"Ringan": "minor", "Sedang": "moderate", "Berat": "severe"}
+_PASSABILITY_MAP = {"Bisa": "possible", "Roda-2": "bike_only", "Tidak Bisa": "impossible"}
+
+
 def _severity_label(score: float) -> str:
     if score < 0.2:
-        return "Ringan"
+        return _SEVERITY_MAP["Ringan"]
     elif score < 0.5:
-        return "Sedang"
-    return "Berat"
+        return _SEVERITY_MAP["Sedang"]
+    return _SEVERITY_MAP["Berat"]
 
 
 def _aggregate_passability(labels: list[str]) -> str:
     """Safety-first (worst-case) aggregation across multiple images."""
     if "Tidak Bisa" in labels:
-        return "Tidak Bisa"
+        return _PASSABILITY_MAP["Tidak Bisa"]
     if "Roda-2" in labels:
-        return "Roda-2"
-    return "Bisa"
+        return _PASSABILITY_MAP["Roda-2"]
+    return _PASSABILITY_MAP["Bisa"]
 
 
 def cmd_generate_annotations(args: argparse.Namespace) -> None:
@@ -240,10 +244,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
     from src.model import JatanMTL
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = JatanMTL().to(device)
-
-    ckpt = torch.load(args.checkpoint, map_location=device)
-    model.load_state_dict(ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt, strict=False)
+    model = JatanMTL(bridge_seg_checkpoint=args.checkpoint).to(device)
     logger.info("Loaded checkpoint from {}", args.checkpoint)
 
     model.eval()
@@ -295,7 +296,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
         severity_score = float(model.compute_bridge_severity(
             class_map.unsqueeze(0), depth_map.unsqueeze(0)
         )[0])
-        passability    = model.compute_bridge_passability(severity_score)
+        passability    = _PASSABILITY_MAP[model.compute_bridge_passability(severity_score)]
 
         all_severities.append(severity_score)
         all_passability.append(passability)
@@ -389,8 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
     # infer
     p_in = sub.add_parser("infer", help="Run inference on one or more images")
     p_in.add_argument("image_paths", nargs="+", help="Path(s) to input image(s)")
-    p_in.add_argument("--checkpoint", default="checkpoints/best_model.pt",
-                      help="JatanMTL checkpoint (default: checkpoints/best_model.pt)")
+    p_in.add_argument("--checkpoint", default="checkpoints/bridge_seg_best.pt",
+                      help="Bridge segmenter checkpoint (default: checkpoints/bridge_seg_best.pt)")
     p_in.add_argument("--with-reasoning", action="store_true",
                       help="Run VLM reasoning after segmentation (requires --vlm-adapter)")
     p_in.add_argument("--vlm-adapter", default=None,
