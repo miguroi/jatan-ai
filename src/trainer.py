@@ -13,7 +13,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.dataset import BridgeDataset, CombinedDamageDataset, get_transform
+from src.dataset import BridgeDataset, CombinedDamageDataset, EIDSegDataset, get_transform
 
 
 def custom_collate_fn(batch):
@@ -248,6 +248,165 @@ class Trainer:
                 "phase": phase,
             },
             path,
+        )
+
+
+class EIDSegBridgeTrainer:
+    """Two-phase trainer for SegFormer-B2 bridge segmentation on EIDSeg (3 classes).
+
+    Classes: 0=Undamaged, 1=Damaged, 2=Destroyed, 255=Ignore
+    Loss: CrossEntropyLoss(ignore_index=255)
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        device: torch.device,
+        data_root: str = "data/raw/eidseg",
+        batch_size: int = 8,
+        epochs1: int = 10,
+        epochs2: int = 20,
+        checkpoint_dir: str = "checkpoints",
+        patience: int = 5,
+        num_workers: int = min(4, os.cpu_count() or 1),
+        resume_phase2: bool = False,
+    ) -> None:
+        self.model        = model
+        self.device       = device
+        self.data_root    = data_root
+        self.batch_size   = batch_size
+        self.epochs1      = epochs1
+        self.epochs2      = epochs2
+        self.checkpoint_dir = checkpoint_dir
+        self.patience     = patience
+        self.num_workers  = num_workers
+        self.resume_phase2 = resume_phase2
+        self.ckpt_path    = os.path.join(checkpoint_dir, "bridge_seg_best.pt")
+        self._scaler      = torch.amp.GradScaler("cuda")
+        self._ce          = nn.CrossEntropyLoss(ignore_index=255)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+    def run(self) -> None:
+        train_ds = EIDSegDataset(split="train", data_root=self.data_root)
+        val_ds   = EIDSegDataset(split="val",   data_root=self.data_root)
+
+        self._train_loader = DataLoader(
+            train_ds, batch_size=self.batch_size, shuffle=True,
+            num_workers=self.num_workers, pin_memory=True,
+        )
+        self._val_loader = DataLoader(
+            val_ds, batch_size=self.batch_size, shuffle=False,
+            num_workers=self.num_workers, pin_memory=True,
+        )
+
+        if self.resume_phase2:
+            if not os.path.exists(self.ckpt_path):
+                raise FileNotFoundError(
+                    f"--resume-phase2 requested but no checkpoint at {self.ckpt_path}"
+                )
+            self.model.bridge_seg_model.load_state_dict(
+                torch.load(self.ckpt_path, map_location=self.device), strict=False
+            )
+            logger.info("Loaded Phase 1 checkpoint — skipping Phase 1")
+        else:
+            self.model.freeze_bridge_seg_encoder()
+            opt1 = torch.optim.AdamW(
+                self.model.bridge_seg_model.decode_head.parameters(), lr=1e-3
+            )
+            logger.info("EIDSegBridgeTrainer Phase 1: decode_head only")
+            self._train_phase(opt1, self.epochs1, patience=None)
+
+        self.model.unfreeze_bridge_seg_encoder()
+        opt2 = torch.optim.AdamW([
+            {"params": self.model.bridge_seg_model.segformer.parameters(),    "lr": 1e-4},
+            {"params": self.model.bridge_seg_model.decode_head.parameters(),  "lr": 1e-3},
+        ])
+        logger.info("EIDSegBridgeTrainer Phase 2: full fine-tune")
+        self._train_phase(opt2, self.epochs2, patience=self.patience)
+
+    def _train_phase(self, optimizer, epochs: int, patience: Optional[int]) -> None:
+        scheduler       = CosineAnnealingLR(optimizer, T_max=epochs)
+        best_val_loss   = float("inf")
+        patience_counter = 0
+
+        for epoch in range(epochs):
+            logger.info("Epoch {}/{}", epoch + 1, epochs)
+            train_loss = self._train_epoch(optimizer)
+            val_loss, val_miou = self._validate()
+            scheduler.step()
+            logger.info(
+                "train_loss={:.4f} val_loss={:.4f} val_mIoU={:.4f}",
+                train_loss, val_loss, val_miou,
+            )
+            if val_loss < best_val_loss:
+                best_val_loss    = val_loss
+                patience_counter = 0
+                torch.save(self.model.bridge_seg_model.state_dict(), self.ckpt_path)
+                logger.success("Saved checkpoint → {}", self.ckpt_path)
+            else:
+                patience_counter += 1
+            if patience is not None and patience_counter >= patience:
+                logger.warning("Early stopping triggered.")
+                break
+
+    def _train_epoch(self, optimizer) -> float:
+        self.model.bridge_seg_model.train()
+        running_loss = 0.0
+        n_batches    = 0
+        pbar = tqdm(self._train_loader, desc="Training bridge seg", leave=False)
+        for batch in pbar:
+            images = batch["image"].to(self.device)   # [B, 3, 512, 512]
+            masks  = batch["mask"].to(self.device)    # [B, 512, 512] long
+
+            optimizer.zero_grad()
+            with torch.amp.autocast("cuda"):
+                out  = self.model.segment_bridge(images)
+                loss = self._ce(out["seg_logits"], masks)
+            self._scaler.scale(loss).backward()
+            self._scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(
+                self.model.bridge_seg_model.parameters(), max_norm=1.0
+            )
+            self._scaler.step(optimizer)
+            self._scaler.update()
+
+            running_loss += loss.item()
+            n_batches    += 1
+            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+        return running_loss / max(n_batches, 1)
+
+    def _validate(self) -> tuple[float, float]:
+        self.model.bridge_seg_model.eval()
+        running_loss = 0.0
+        running_miou = 0.0
+        n_batches    = 0
+        pbar = tqdm(self._val_loader, desc="Validating bridge seg", leave=False)
+        with torch.no_grad():
+            for batch in pbar:
+                images = batch["image"].to(self.device)
+                masks  = batch["mask"].to(self.device)
+                with torch.amp.autocast("cuda"):
+                    out  = self.model.segment_bridge(images)
+                    loss = self._ce(out["seg_logits"], masks)
+
+                class_map = out["class_map"]  # [B, H, W]
+                valid     = masks != 255
+                ious = []
+                for c in range(3):
+                    pred_c   = (class_map == c) & valid
+                    target_c = (masks == c) & valid
+                    inter    = (pred_c & target_c).sum().float()
+                    union    = (pred_c | target_c).sum().float()
+                    if union > 0:
+                        ious.append((inter / union).item())
+                miou = float(np.mean(ious)) if ious else 0.0
+
+                running_loss += loss.item()
+                running_miou += miou
+                n_batches    += 1
+        return (
+            running_loss / max(n_batches, 1),
+            running_miou / max(n_batches, 1),
         )
 
 

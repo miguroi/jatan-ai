@@ -10,12 +10,8 @@ import torch
 from albumentations.pytorch import ToTensorV2
 from torch.utils.data import Dataset, WeightedRandomSampler
 
-_BRIDGE_CLASSES = [
-    "Crack", "ACrack", "Wetspot", "Efflorescence", "Rust", "Rockpocket",
-    "Hollowareas", "Cavity", "Spalling", "Graffiti", "Weathering",
-    "Restformwork", "ExposedRebars",
-    "Bearing", "EJoint", "Drainage", "PEquipment", "JTape", "WConccor",
-]
+# EIDSeg 3-class bridge damage (replaces dacl10k 19-class)
+_BRIDGE_CLASSES = ["Undamaged", "Damaged", "Destroyed"]
 _N_BRIDGE = len(_BRIDGE_CLASSES)
 
 _ROAD_CLASSES = ["D00", "D10", "D20", "D40", "NoDefect"]
@@ -159,6 +155,134 @@ class RoadDataset(Dataset):
             "image": img_tensor,
             "domain": torch.tensor(0, dtype=torch.long),
             "damage": damage,
+        }
+
+
+class EIDSegDataset(Dataset):
+    """EIDSeg earthquake infrastructure damage segmentation dataset.
+
+    Remaps 6 EIDSeg polygon labels → 3 bridge-relevant classes:
+      0: Undamaged  (UD_Building, UD_Road)
+      1: Damaged    (D_Building, D_Road)
+      2: Destroyed  (Debris)
+    255: Ignore     (Undesignated + unannotated background)
+
+    Annotations are CVAT XML polygons rasterised on-the-fly.
+    """
+
+    _LABEL_MAP: dict[str, int] = {
+        "UD_Building":  0,
+        "UD_Road":      0,
+        "D_Building":   1,
+        "D_Road":       1,
+        "Debris":       2,
+        "Undesignated": 255,
+    }
+
+    def __init__(
+        self,
+        split: str,
+        data_root: str = "data/raw/eidseg",
+        transform: Optional[A.Compose] = None,
+    ) -> None:
+        import xml.etree.ElementTree as ET
+
+        self.transform = transform if transform is not None else self._default_transform(split)
+
+        split_dir  = Path(data_root) / "data" / split
+        xml_file   = split_dir / f"{split}.xml"
+        images_dir = split_dir / "images"
+        if not any(images_dir.glob("*.*")):
+            images_dir = images_dir / "default"
+        self._images_dir = images_dir
+
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
+
+        self._samples: list[dict] = []
+        for img_elem in root.findall("image"):
+            name   = img_elem.get("name", "")
+            width  = int(img_elem.get("width",  512))
+            height = int(img_elem.get("height", 512))
+
+            img_path = images_dir / name
+            if not img_path.exists():
+                continue
+
+            polygons: list[dict] = []
+            for poly in img_elem.findall("polygon"):
+                label = poly.get("label", "")
+                if label not in self._LABEL_MAP:
+                    continue
+                pts_str = poly.get("points", "")
+                z_order = int(poly.get("z_order", 0))
+                pts = [
+                    tuple(float(v) for v in pt.split(","))
+                    for pt in pts_str.split(";") if pt.strip()
+                ]
+                if len(pts) >= 3:
+                    polygons.append({"label": label, "points": pts, "z_order": z_order})
+
+            polygons.sort(key=lambda p: p["z_order"])
+            self._samples.append({
+                "image_path": img_path,
+                "width": width,
+                "height": height,
+                "polygons": polygons,
+            })
+
+        if not self._samples:
+            raise FileNotFoundError(
+                f"No valid samples found in {xml_file}. "
+                f"Check that images exist in {images_dir}."
+            )
+
+    @staticmethod
+    def _default_transform(split: str) -> A.Compose:
+        if split == "train":
+            return A.Compose([
+                A.Resize(512, 512),
+                A.HorizontalFlip(p=0.5),
+                A.RandomBrightnessContrast(p=0.3),
+                A.Normalize(mean=_IMAGENET_MEAN, std=_IMAGENET_STD),
+                ToTensorV2(),
+            ])
+        return A.Compose([
+            A.Resize(512, 512),
+            A.Normalize(mean=_IMAGENET_MEAN, std=_IMAGENET_STD),
+            ToTensorV2(),
+        ])
+
+    def _render_mask(self, sample: dict) -> np.ndarray:
+        from PIL import Image as PILImage, ImageDraw
+
+        w, h = sample["width"], sample["height"]
+        mask = PILImage.new("L", (w, h), 255)  # start with ignore
+        draw = ImageDraw.Draw(mask)
+        for poly in sample["polygons"]:
+            cls_idx = self._LABEL_MAP[poly["label"]]
+            pts = [(int(x), int(y)) for x, y in poly["points"]]
+            draw.polygon(pts, fill=cls_idx)
+        return np.array(mask, dtype=np.uint8)
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def __getitem__(self, idx: int) -> dict:
+        from PIL import Image as PILImage
+
+        sample  = self._samples[idx]
+        img_np  = np.array(PILImage.open(sample["image_path"]).convert("RGB"))
+        mask_np = self._render_mask(sample)
+
+        aug         = self.transform(image=img_np, mask=mask_np)
+        img_tensor  = aug["image"]
+        mask_tensor = torch.from_numpy(aug["mask"].copy()).long()
+
+        return {
+            "image":  img_tensor,
+            "domain": torch.tensor(1),
+            "mask":   mask_tensor,   # [H, W], values: 0,1,2,255
         }
 
 

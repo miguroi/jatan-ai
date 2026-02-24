@@ -75,6 +75,19 @@ def cmd_train(args: argparse.Namespace) -> None:
         )
         trainer.run()
 
+    elif args.task == "eidseg-bridge":
+        from src.trainer import EIDSegBridgeTrainer
+        trainer = EIDSegBridgeTrainer(
+            model,
+            device,
+            data_root=args.data_root,
+            batch_size=args.batch_size,
+            epochs1=args.epochs1,
+            epochs2=args.epochs2,
+            resume_phase2=args.resume_phase2,
+        )
+        trainer.run()
+
 
 def cmd_eval(args: argparse.Namespace) -> None:
     import torch
@@ -289,17 +302,16 @@ def cmd_infer(args: argparse.Namespace) -> None:
             with torch.no_grad():
                 out = model.segment_bridge(x_seg)
 
-            presence_mask = out["presence"][0].cpu()                    # [19]
-            probs_map     = out["probs"][0].cpu()                       # [19, 512, 512]
-            total_pixels  = probs_map.shape[1] * probs_map.shape[2]
+            class_map    = out["class_map"][0].cpu()   # [512, 512]
+            total_pixels = class_map.numel()
 
-            detected_classes = [
-                _BRIDGE_CLASSES[i] for i, p in enumerate(presence_mask.tolist()) if p
-            ]
             coverage = {
-                _BRIDGE_CLASSES[i]: round(float((probs_map[i] > args.threshold).sum()) / total_pixels * 100, 2)
-                for i in range(len(_BRIDGE_CLASSES))
+                cls: round(float((class_map == i).sum()) / total_pixels * 100, 2)
+                for i, cls in enumerate(_BRIDGE_CLASSES)
             }
+            detected_classes = [
+                cls for cls in ["Damaged", "Destroyed"] if coverage.get(cls, 0.0) > 0
+            ]
 
             severity_score = model.compute_bridge_severity(detected_classes, coverage)
             passability    = model.compute_bridge_passability(severity_score)
@@ -320,8 +332,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
 
             if vlm is not None:
                 vlm_result = vlm.describe(
-                    img, probs_map, severity_score, passability,
-                    threshold=args.threshold,
+                    img, class_map, severity_score, passability, coverage,
                 )
                 entry["reasoning"] = {
                     "report":        vlm_result["report"],
@@ -424,9 +435,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_tr = sub.add_parser("train", help="Train the model")
     p_tr.add_argument(
         "--task",
-        choices=["road", "bridge-seg"],
+        choices=["road", "bridge-seg", "eidseg-bridge"],
         default="road",
-        help="Training task: 'road' (ResNet50 road classifier) or 'bridge-seg' (SegFormer-B2 dacl10k)",
+        help="Training task: 'road' (ResNet50), 'bridge-seg' (dacl10k 19-class), or 'eidseg-bridge' (EIDSeg 3-class)",
     )
     p_tr.add_argument("--batch-size", type=int, default=32)
     p_tr.add_argument("--epochs1",    type=int, default=10,
@@ -434,7 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_tr.add_argument("--epochs2",    type=int, default=20,
                       help="Epochs for full fine-tune phase")
     p_tr.add_argument("--data-root",  default="data/raw",
-                      help="Data root (use data/dacl10k for bridge-seg)")
+                      help="Data root (use data/dacl10k for bridge-seg, data/raw/eidseg for eidseg-bridge)")
     p_tr.add_argument("--resume-phase2", action="store_true",
                       help="Skip Phase 1 and load checkpoints/bridge_seg_best.pt directly into Phase 2")
     p_tr.set_defaults(func=cmd_train)

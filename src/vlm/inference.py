@@ -25,27 +25,11 @@ _ROAD_DAMAGE_NAMES: dict[str, str] = {
     "D40": "pothole",
 }
 
-# 19 visually distinct (R, G, B) colours — one per bridge defect class
+# 3-class EIDSeg bridge colours
 _CLASS_COLORS: list[tuple[int, int, int]] = [
-    (220,  20,  60),  # Crack         — crimson
-    (255, 165,   0),  # ACrack        — orange
-    ( 50, 205,  50),  # Wetspot       — lime green
-    (  0, 191, 255),  # Efflorescence — deep sky blue
-    (238, 130, 238),  # Rust          — violet
-    (255, 215,   0),  # Rockpocket    — gold
-    (  0, 128, 128),  # Hollowareas   — teal
-    (255,  99,  71),  # Cavity        — tomato
-    (100, 149, 237),  # Spalling      — cornflower blue
-    (144, 238, 144),  # Graffiti      — light green
-    (255, 182, 193),  # Weathering    — light pink
-    ( 64, 224, 208),  # Restformwork  — turquoise
-    (218, 165,  32),  # ExposedRebars — goldenrod
-    (173, 216, 230),  # Bearing       — light blue
-    (250, 128, 114),  # EJoint        — salmon
-    (152, 251, 152),  # Drainage      — pale green
-    (135, 206, 235),  # PEquipment    — sky blue
-    (255, 160, 122),  # JTape         — light salmon
-    (176, 196, 222),  # WConccor      — light steel blue
+    ( 50, 205,  50),  # Undamaged — lime green
+    (255, 165,   0),  # Damaged   — orange
+    (220,  20,  60),  # Destroyed — crimson
 ]
 
 
@@ -91,40 +75,40 @@ class BridgeVLMInference:
     def render_mask_overlay(
         self,
         image: Image.Image,
-        seg_probs: torch.Tensor,
-        threshold: float = 0.5,
+        class_map: torch.Tensor,
         alpha: float = 0.45,
     ) -> tuple[Image.Image, list[str]]:
         """
-        Alpha-composite 19-class colour masks onto the original image.
+        Alpha-composite 3-class EIDSeg colour masks onto the original image.
 
         Args:
             image:     original PIL image.
-            seg_probs: (19, H, W) float tensor of class probabilities.
-            threshold: probability threshold for a pixel to be considered active.
+            class_map: (H, W) long tensor with values 0=Undamaged,1=Damaged,2=Destroyed.
             alpha:     mask opacity.
 
         Returns:
             (overlay PIL image, list of detected class names)
         """
-        H, W = seg_probs.shape[1], seg_probs.shape[2]
-        base = image.resize((W, H), Image.LANCZOS).convert("RGBA")
+        H, W  = class_map.shape
+        base  = image.resize((W, H), Image.LANCZOS).convert("RGBA")
         composite = Image.new("RGBA", base.size, (0, 0, 0, 0))
         detected: list[str] = []
+        cm_np = class_map.cpu().numpy()
 
         for i, cls_name in enumerate(_BRIDGE_CLASSES):
-            prob_map = seg_probs[i].cpu().numpy()  # (H, W)
-            binary   = (prob_map > threshold).astype(np.uint8)
+            if i == 0:
+                continue  # skip Undamaged overlay — show only damage
+            binary = (cm_np == i).astype(np.uint8)
             if binary.sum() == 0:
                 continue
             detected.append(cls_name)
-            r, g, b   = _CLASS_COLORS[i % len(_CLASS_COLORS)]
+            r, g, b    = _CLASS_COLORS[i]
             fill_layer = Image.new("RGBA", base.size, (r, g, b, 0))
             mask_layer = Image.fromarray(
                 (binary * int(255 * alpha)).astype(np.uint8), mode="L"
             )
             fill_layer.putalpha(mask_layer)
-            composite = Image.alpha_composite(composite, fill_layer)
+            composite  = Image.alpha_composite(composite, fill_layer)
 
         result = Image.alpha_composite(base, composite).convert("RGB")
         return result, detected
@@ -180,35 +164,27 @@ class BridgeVLMInference:
     def describe(
         self,
         image: Image.Image,
-        seg_probs: torch.Tensor,
+        class_map: torch.Tensor,
         severity_score: float,
         passability: str,
-        threshold: float = 0.5,
+        coverage: dict[str, float],
     ) -> dict:
         """
         Full post-segmentation reasoning pipeline.
 
         Args:
-            image:         original PIL image.
-            seg_probs:     (19, H, W) float tensor from SegFormer.
+            image:          original PIL image.
+            class_map:      (H, W) long tensor with values 0=Undamaged,1=Damaged,2=Destroyed.
             severity_score: float severity score from compute_bridge_severity().
-            passability:   passability tier string from compute_bridge_passability().
-            threshold:     probability threshold for class detection.
+            passability:    passability tier string from compute_bridge_passability().
+            coverage:       pre-computed coverage dict {class_name: pct}.
 
         Returns:
             {"report": str, "detected": list[str], "overlay_image": PIL.Image}
         """
-        overlay_img, detected = self.render_mask_overlay(image, seg_probs, threshold)
+        overlay_img, detected = self.render_mask_overlay(image, class_map)
 
-        total_pixels = seg_probs.shape[1] * seg_probs.shape[2]
-        coverage_map = {
-            _BRIDGE_CLASSES[i]: round(
-                float((seg_probs[i] > threshold).sum()) / total_pixels * 100, 2
-            )
-            for i in range(len(_BRIDGE_CLASSES))
-        }
-
-        prompt = self._build_inference_prompt(detected, coverage_map, severity_score, passability)
+        prompt = self._build_inference_prompt(detected, coverage, severity_score, passability)
 
         messages = [
             {
