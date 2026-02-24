@@ -795,7 +795,7 @@ class EIDSegAnnotationGenerator:
         output_path: str = "data/vlm_annotations_eidseg.jsonl",
         api_key: str = "",
         base_url: str = "https://openrouter.ai/api/v1",
-        model: str = "qwen/qwen3-vl-32b-instruct",
+        model: str = "qwen/qwen2.5-vl-72b-instruct",
         split: str = "train",
         max_retries: int = 3,
         retry_delay: float = 5.0,
@@ -814,6 +814,52 @@ class EIDSegAnnotationGenerator:
         self.request_delay = request_delay
         self.cot           = cot
         self.max_samples   = max_samples
+
+        # Load DPT-Large for depth-weighted severity (matches inference pipeline)
+        import torch
+        from transformers import DPTForDepthEstimation
+        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._depth_model = DPTForDepthEstimation.from_pretrained("Intel/dpt-large")
+        self._depth_model.eval().to(self._device)
+        logger.info("Loaded DPT-Large for depth-weighted severity computation.")
+
+    def _compute_depth_severity(self, img: Image.Image, mask: "torch.Tensor") -> float:
+        """Depth-weighted severity matching the inference pipeline algorithm."""
+        import torch
+        import torch.nn.functional as F
+        from torchvision import transforms
+
+        _DS_W = 0.65
+        tfm = transforms.Compose([
+            transforms.Resize((512, 512)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        x = tfm(img).unsqueeze(0).to(self._device)
+        with torch.no_grad():
+            depth_out = self._depth_model(pixel_values=x)
+            depth_raw = F.interpolate(
+                depth_out.predicted_depth.unsqueeze(1),
+                size=(512, 512), mode="bilinear", align_corners=False,
+            ).squeeze().cpu()
+
+        d_min, d_max = depth_raw.min(), depth_raw.max()
+        depth_map = 0.1 + (depth_raw - d_min) / (d_max - d_min + 1e-8) * 0.9
+
+        # Resize mask to 512×512 using nearest-neighbour
+        mask_512 = torch.from_numpy(
+            np.array(
+                Image.fromarray(mask.numpy().astype(np.uint8)).resize((512, 512), Image.NEAREST)
+            )
+        ).long()
+
+        damaged_w   = (mask_512 == 1).float() * depth_map
+        destroyed_w = (mask_512 == 2).float() * depth_map
+        undamaged_w = (mask_512 == 0).float() * depth_map
+
+        numerator   = _DS_W * damaged_w.sum() + destroyed_w.sum()
+        denominator = (damaged_w + destroyed_w + undamaged_w).sum().clamp(min=1e-8)
+        return float((numerator / denominator).clamp(max=1.0))
 
     def _load_existing_ids(self) -> set[str]:
         existing: set[str] = set()
@@ -915,11 +961,19 @@ class EIDSegAnnotationGenerator:
                 detected = [
                     cls for cls in ["Damaged", "Destroyed"] if coverage.get(cls, 0.0) > 0
                 ]
-                severity_score = min(
-                    coverage.get("Destroyed", 0.0) * 2.0 / 100
-                    + coverage.get("Damaged",   0.0) * 0.5 / 100,
-                    1.0,
-                )
+
+                # Depth-weighted severity (matches inference pipeline)
+                try:
+                    img_for_depth = Image.open(image_path).convert("RGB")
+                    severity_score = self._compute_depth_severity(img_for_depth, mask)
+                except Exception as depth_exc:
+                    logger.warning("Depth computation failed for {}: {} — falling back to coverage.", image_path, depth_exc)
+                    severity_score = min(
+                        coverage.get("Destroyed", 0.0) * 2.0 / 100
+                        + coverage.get("Damaged",   0.0) * 0.5 / 100,
+                        1.0,
+                    )
+
                 passability = (
                     "Bisa"       if severity_score < 0.3 else
                     "Roda-2"     if severity_score < 0.6 else

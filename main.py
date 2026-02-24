@@ -278,9 +278,10 @@ def cmd_infer(args: argparse.Namespace) -> None:
 
         x_seg = seg_tfm(img).unsqueeze(0).to(device)
         with torch.no_grad():
-            out = model.segment_bridge(x_seg)
+            out = model.segment_bridge(x_seg, with_depth=True)
 
         class_map    = out["class_map"][0].cpu()
+        depth_map    = out["depth_map"][0].cpu()
         total_pixels = class_map.numel()
 
         coverage = {
@@ -291,7 +292,9 @@ def cmd_infer(args: argparse.Namespace) -> None:
             cls for cls in ["Damaged", "Destroyed"] if coverage.get(cls, 0.0) > 0
         ]
 
-        severity_score = model.compute_bridge_severity(detected_classes, coverage)
+        severity_score = float(model.compute_bridge_severity(
+            class_map.unsqueeze(0), depth_map.unsqueeze(0)
+        )[0])
         passability    = model.compute_bridge_passability(severity_score)
 
         all_severities.append(severity_score)
@@ -416,8 +419,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="API key (default: OPENROUTER_API_KEY from .env)")
     p_ga.add_argument("--base-url",      default="https://openrouter.ai/api/v1",
                       help="Base URL for the API (default: OpenRouter)")
-    p_ga.add_argument("--model",         default="qwen/qwen3-vl-32b-instruct",
-                      help="Vision model to use (default: qwen/qwen3-vl-32b-instruct)")
+    p_ga.add_argument("--model",         default="qwen/qwen2.5-vl-72b-instruct",
+                      help="Vision model to use (default: qwen/qwen2.5-vl-72b-instruct)")
     p_ga.add_argument("--split",         default="train",
                       help="Dataset split to annotate (default: train)")
     p_ga.add_argument("--max-retries",   type=int,   default=3)

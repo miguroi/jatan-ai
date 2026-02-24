@@ -197,16 +197,20 @@ class JatanMTL(nn.Module):
             "passability": self.compute_passability(seg_map, depth_map),
         }
 
-    def segment_bridge(self, x: torch.Tensor) -> dict:
-        """Run SegFormer-B2 bridge segmentation (dacl10k, 19 classes).
+    def segment_bridge(self, x: torch.Tensor, with_depth: bool = False) -> dict:
+        """Run SegFormer-B2 bridge segmentation (EIDSeg, 3 classes).
 
         Args:
-            x: [B, 3, H, W]
+            x:          [B, 3, H, W]
+            with_depth: also run DPT-Large depth estimation (for inference).
+                        Keep False during training to avoid unnecessary overhead.
 
         Returns:
-            seg_logits: [B, 19, 512, 512]
-            probs:      [B, 19, 512, 512]  per-pixel sigmoid probabilities
-            presence:   [B, 19]            bool — class detected if max prob > 0.5
+            seg_logits: [B, 3, 512, 512]
+            probs:      [B, 3, 512, 512]  per-pixel softmax probabilities
+            class_map:  [B, 512, 512]     argmax class index
+            presence:   [B, 3]            bool — class detected anywhere in image
+            depth_map:  [B, 512, 512]     normalised depth (only if with_depth=True)
         """
         x_resized = F.interpolate(x, size=(512, 512), mode="bilinear", align_corners=False)
         out = self.bridge_seg_model(pixel_values=x_resized)
@@ -215,11 +219,21 @@ class JatanMTL(nn.Module):
         )
         probs     = torch.softmax(seg_logits, dim=1)   # [B, 3, 512, 512]
         class_map = probs.argmax(dim=1)               # [B, 512, 512]
-        # presence[b, c] = True if class c appears anywhere in image b
         presence  = torch.stack(
             [class_map == c for c in range(probs.shape[1])], dim=1
         ).any(dim=(2, 3))                             # [B, 3]
-        return {"seg_logits": seg_logits, "probs": probs, "class_map": class_map, "presence": presence}
+
+        result = {"seg_logits": seg_logits, "probs": probs, "class_map": class_map, "presence": presence}
+
+        if with_depth:
+            depth_out = self.depth_model(pixel_values=x_resized)
+            depth_map = F.interpolate(
+                depth_out.predicted_depth.unsqueeze(1),
+                size=(512, 512), mode="bilinear", align_corners=False,
+            ).squeeze(1)
+            result["depth_map"] = self._normalize_depth(depth_map)
+
+        return result
 
     @staticmethod
     def _normalize_depth(depth: torch.Tensor) -> torch.Tensor:
@@ -263,20 +277,32 @@ class JatanMTL(nn.Module):
         return result
 
     @staticmethod
-    def compute_bridge_severity(detected_classes: list[str], coverage: dict[str, float]) -> float:
-        """Coverage-weighted structural severity score for bridge images.
+    def compute_bridge_severity(class_map: torch.Tensor, depth_map: torch.Tensor) -> torch.Tensor:
+        """Depth-weighted bridge damage severity score.
 
-        Structural defects (cracks, spalling, exposed rebars, etc.) carry weight 1.0;
-        cosmetic defects (graffiti, weathering, etc.) carry weight 0.2.
+        Follows the volume ratio algorithm:
+            numerator   = DS_weight × Σ(Damaged×depth) + Σ(Destroyed×depth)
+            denominator = Σ(Damaged×depth) + Σ(Destroyed×depth) + Σ(Undamaged×depth)
+            score       = numerator / denominator, clamped to [0, 1]
 
-        score = Destroyed_pct × 2.0/100 + Damaged_pct × 0.5/100, clamped to [0, 1]
-        (25% Destroyed → 0.5 Sedang; 50% Destroyed → 1.0 Berat)
+        Destroyed pixels contribute fully to numerator (impassable).
+        Damaged pixels are weighted by _DS_WEIGHT (0.65).
+        Undamaged pixels only appear in denominator (reduce severity).
+
+        Args:
+            class_map: [B, H, W] long — 0=Undamaged, 1=Damaged, 2=Destroyed
+            depth_map: [B, H, W] float — normalised depth in [0.1, 1.0]
+
+        Returns:
+            [B] float severity scores in [0, 1]
         """
-        return min(
-            coverage.get("Destroyed", 0.0) * 2.0 / 100
-            + coverage.get("Damaged",   0.0) * 0.5 / 100,
-            1.0,
-        )
+        damaged_w   = (class_map == 1).float() * depth_map   # DS
+        destroyed_w = (class_map == 2).float() * depth_map   # Debris
+        undamaged_w = (class_map == 0).float() * depth_map   # US
+
+        numerator   = _DS_WEIGHT * damaged_w.sum(dim=(1, 2)) + destroyed_w.sum(dim=(1, 2))
+        denominator = (damaged_w + destroyed_w + undamaged_w).sum(dim=(1, 2)).clamp(min=1e-8)
+        return (numerator / denominator).clamp(max=1.0)
 
     @staticmethod
     def compute_bridge_passability(severity_score: float) -> str:
