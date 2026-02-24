@@ -236,7 +236,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
     from PIL import Image
     from torchvision import transforms
 
-    from src.dataset import EIDSEG_CLASSES, _BRIDGE_CLASSES, _ROAD_CLASSES
+    from src.dataset import _BRIDGE_CLASSES
     from src.model import JatanMTL
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -248,17 +248,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
 
     model.eval()
 
-    cls_tfm = transforms.Compose([
-        transforms.Resize((384, 384)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
     seg_tfm = transforms.Compose([
-        transforms.Resize((640, 640)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    bridge_tfm = transforms.Compose([
         transforms.Resize((512, 512)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -269,26 +259,15 @@ def cmd_infer(args: argparse.Namespace) -> None:
     # Lazy-load VLM if reasoning is requested
     vlm = None
     if getattr(args, "with_reasoning", False):
-        if args.domain == "bridge":
-            if not getattr(args, "vlm_adapter", None):
-                logger.error("--with-reasoning requires --vlm-adapter for bridge domain.")
-                sys.exit(1)
-            from src.vlm.inference import BridgeVLMInference
-            logger.info("Loading bridge VLM adapter from {}", args.vlm_adapter)
-            vlm = BridgeVLMInference(
-                adapter_path=args.vlm_adapter,
-                max_new_tokens=getattr(args, "max_new_tokens", 256),
-            )
-        else:  # road
-            if not getattr(args, "vlm_road_adapter", None):
-                logger.error("--with-reasoning requires --vlm-road-adapter for road domain.")
-                sys.exit(1)
-            from src.vlm.inference import RoadVLMInference
-            logger.info("Loading road VLM adapter from {}", args.vlm_road_adapter)
-            vlm = RoadVLMInference(
-                adapter_path=args.vlm_road_adapter,
-                max_new_tokens=getattr(args, "max_new_tokens", 256),
-            )
+        if not getattr(args, "vlm_adapter", None):
+            logger.error("--with-reasoning requires --vlm-adapter.")
+            sys.exit(1)
+        from src.vlm.inference import BridgeVLMInference
+        logger.info("Loading VLM adapter from {}", args.vlm_adapter)
+        vlm = BridgeVLMInference(
+            adapter_path=args.vlm_adapter,
+            max_new_tokens=getattr(args, "max_new_tokens", 256),
+        )
 
     per_image = []
     all_severities: list[float] = []
@@ -297,102 +276,49 @@ def cmd_infer(args: argparse.Namespace) -> None:
     for image_path in image_paths:
         img = Image.open(image_path).convert("RGB")
 
-        if args.domain == "bridge":
-            x_seg = bridge_tfm(img).unsqueeze(0).to(device)
-            with torch.no_grad():
-                out = model.segment_bridge(x_seg)
+        x_seg = seg_tfm(img).unsqueeze(0).to(device)
+        with torch.no_grad():
+            out = model.segment_bridge(x_seg)
 
-            class_map    = out["class_map"][0].cpu()   # [512, 512]
-            total_pixels = class_map.numel()
+        class_map    = out["class_map"][0].cpu()
+        total_pixels = class_map.numel()
 
-            coverage = {
-                cls: round(float((class_map == i).sum()) / total_pixels * 100, 2)
-                for i, cls in enumerate(_BRIDGE_CLASSES)
-            }
-            detected_classes = [
-                cls for cls in ["Damaged", "Destroyed"] if coverage.get(cls, 0.0) > 0
-            ]
+        coverage = {
+            cls: round(float((class_map == i).sum()) / total_pixels * 100, 2)
+            for i, cls in enumerate(_BRIDGE_CLASSES)
+        }
+        detected_classes = [
+            cls for cls in ["Damaged", "Destroyed"] if coverage.get(cls, 0.0) > 0
+        ]
 
-            severity_score = model.compute_bridge_severity(detected_classes, coverage)
-            passability    = model.compute_bridge_passability(severity_score)
+        severity_score = model.compute_bridge_severity(detected_classes, coverage)
+        passability    = model.compute_bridge_passability(severity_score)
 
-            all_severities.append(severity_score)
-            all_passability.append(passability)
+        all_severities.append(severity_score)
+        all_passability.append(passability)
 
-            entry: dict = {
-                "image":   image_path,
-                "domain":  "bridge",
-                "bridge_seg": {
-                    "presence": detected_classes,
-                    "coverage": coverage,
-                },
-                "severity":    {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
-                "passability": passability,
-            }
+        entry: dict = {
+            "image":   image_path,
+            "domain":  args.domain,
+            "seg": {
+                "presence": detected_classes,
+                "coverage": coverage,
+            },
+            "severity":    {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
+            "passability": passability,
+        }
 
-            if vlm is not None:
-                vlm_result = vlm.describe(
-                    img, class_map, severity_score, passability, coverage,
-                )
-                entry["reasoning"] = {
-                    "report":        vlm_result["report"],
-                    "detected":      vlm_result["detected"],
-                    "overlay_image": _pil_to_base64(vlm_result["overlay_image"]),
-                }
-
-            per_image.append(entry)
-
-        else:  # road
-            x_cls = cls_tfm(img).unsqueeze(0).to(device)
-            with torch.no_grad():
-                logits = model(x_cls, "road")
-                probs  = torch.sigmoid(logits)[0].cpu().tolist()
-
-            damage_classes = {
-                cls_name: round(prob, 4)
-                for cls_name, prob in zip(_ROAD_CLASSES, probs)
-            }
-            detected = [c for c, p in damage_classes.items() if p >= args.threshold]
-
-            x_seg = seg_tfm(img).unsqueeze(0).to(device)
-            with torch.no_grad():
-                out = model.segment(x_seg)
-
-            seg_map = out["seg_map"][0].cpu().numpy()
-            severity_score = float(out["severity"][0].cpu())
-            passability = out["passability"][0]
-
-            total_pixels = seg_map.size
-            seg_pixel_pct = {
-                cls_name: round(int((seg_map == i).sum()) / total_pixels * 100, 2)
-                for i, cls_name in enumerate(EIDSEG_CLASSES)
+        if vlm is not None:
+            vlm_result = vlm.describe(
+                img, class_map, severity_score, passability, coverage,
+            )
+            entry["reasoning"] = {
+                "report":        vlm_result["report"],
+                "detected":      vlm_result["detected"],
+                "overlay_image": _pil_to_base64(vlm_result["overlay_image"]),
             }
 
-            all_severities.append(severity_score)
-            all_passability.append(passability)
-
-            road_entry: dict = {
-                "image":        image_path,
-                "domain":       "road",
-                "damage":       damage_classes,
-                "detected":     detected,
-                "severity":     {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
-                "passability":  passability,
-                "segmentation": seg_pixel_pct,
-            }
-
-            if vlm is not None:
-                vlm_result = vlm.describe(
-                    img, damage_classes, seg_map, severity_score, passability,
-                    threshold=args.threshold,
-                )
-                road_entry["reasoning"] = {
-                    "report":        vlm_result["report"],
-                    "detected":      vlm_result["detected"],
-                    "overlay_image": _pil_to_base64(vlm_result["overlay_image"]),
-                }
-
-            per_image.append(road_entry)
+        per_image.append(entry)
 
     if all_severities:
         agg_severity_score = max(all_severities)
@@ -465,18 +391,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--domain",
         choices=["bridge", "road"],
         default="bridge",
-        help="Domain: 'bridge' (dacl10k seg) or 'road' (RDD2022 cls + EIDSeg)",
+        help="Domain label for output JSON (both use EIDSeg 3-class segmentation)",
     )
     p_in.add_argument("--checkpoint", default="checkpoints/best_model.pt",
-                      help="Road model checkpoint (ignored for bridge domain)")
-    p_in.add_argument("--threshold",  type=float, default=0.5,
-                      help="Sigmoid threshold for road classification (default: 0.5)")
+                      help="JatanMTL checkpoint (default: checkpoints/best_model.pt)")
     p_in.add_argument("--with-reasoning", action="store_true",
-                      help="Run VLM reasoning after bridge segmentation (requires --vlm-adapter)")
+                      help="Run VLM reasoning after segmentation (requires --vlm-adapter)")
     p_in.add_argument("--vlm-adapter", default=None,
-                      help="Path to bridge LoRA adapter dir (e.g. checkpoints/vlm_lora/bridge/final_adapter)")
-    p_in.add_argument("--vlm-road-adapter", default=None,
-                      help="Path to road LoRA adapter dir (e.g. checkpoints/vlm_lora/road/final_adapter)")
+                      help="Path to LoRA adapter dir (e.g. checkpoints/vlm_lora/grpo/final_adapter)")
     p_in.add_argument("--max-new-tokens", type=int, default=256,
                       help="Max new tokens for VLM generation (default: 256)")
     p_in.set_defaults(func=cmd_infer)
