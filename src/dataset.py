@@ -277,7 +277,7 @@ class EIDSegDataset(Dataset):
 
         aug         = self.transform(image=img_np, mask=mask_np)
         img_tensor  = aug["image"]
-        mask_tensor = torch.from_numpy(aug["mask"].copy()).long()
+        mask_tensor = aug["mask"].clone().long()
 
         return {
             "image":  img_tensor,
