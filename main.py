@@ -416,8 +416,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="API key (default: OPENROUTER_API_KEY from .env)")
     p_ga.add_argument("--base-url",      default="https://openrouter.ai/api/v1",
                       help="Base URL for the API (default: OpenRouter)")
-    p_ga.add_argument("--model",         default="qwen/qwen2.5-vl-72b-instruct",
-                      help="Vision model to use (default: qwen/qwen2.5-vl-72b-instruct)")
+    p_ga.add_argument("--model",         default="qwen/qwen3-vl-32b-instruct",
+                      help="Vision model to use (default: qwen/qwen3-vl-32b-instruct)")
     p_ga.add_argument("--split",         default="train",
                       help="Dataset split to annotate (default: train)")
     p_ga.add_argument("--max-retries",   type=int,   default=3)

@@ -795,7 +795,7 @@ class EIDSegAnnotationGenerator:
         output_path: str = "data/vlm_annotations_eidseg.jsonl",
         api_key: str = "",
         base_url: str = "https://openrouter.ai/api/v1",
-        model: str = "google/gemini-2.0-flash-001",
+        model: str = "qwen/qwen3-vl-32b-instruct",
         split: str = "train",
         max_retries: int = 3,
         retry_delay: float = 5.0,
