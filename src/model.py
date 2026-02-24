@@ -10,17 +10,13 @@ _N_SEG_CLASSES = 6
 
 _BRIDGE_SEG_PRETRAINED = "nvidia/mit-b2"
 _BRIDGE_SEG_CHECKPOINT = "checkpoints/bridge_seg_best.pt"
-_N_BRIDGE_SEG_CLASSES = 19
+_N_BRIDGE_SEG_CLASSES = 3
 
 _DS_WEIGHT = 0.65
 
 _PASSABILITY_BISA  = 0.6   # road: clear fraction above which all vehicles can pass
 _PASSABILITY_RODA2 = 0.2   # road: clear fraction above which motorcycles can pass
 
-_BRIDGE_STRUCTURAL_CLASSES = {
-    "Crack", "ACrack", "Spalling", "ExposedRebars",
-    "Cavity", "Hollowareas", "Rockpocket",
-}
 _BRIDGE_PASSABILITY_BISA  = 0.3  # bridge: severity below this → all vehicles
 _BRIDGE_PASSABILITY_RODA2 = 0.6  # bridge: severity below this → motorcycles only
 
@@ -217,9 +213,13 @@ class JatanMTL(nn.Module):
         seg_logits = F.interpolate(
             out.logits, size=(512, 512), mode="bilinear", align_corners=False
         )
-        probs = torch.sigmoid(seg_logits)             # [B, 19, 512, 512]
-        presence = probs.amax(dim=(2, 3)) > 0.5       # [B, 19]
-        return {"seg_logits": seg_logits, "probs": probs, "presence": presence}
+        probs     = torch.softmax(seg_logits, dim=1)   # [B, 3, 512, 512]
+        class_map = probs.argmax(dim=1)               # [B, 512, 512]
+        # presence[b, c] = True if class c appears anywhere in image b
+        presence  = torch.stack(
+            [class_map == c for c in range(probs.shape[1])], dim=1
+        ).any(dim=(2, 3))                             # [B, 3]
+        return {"seg_logits": seg_logits, "probs": probs, "class_map": class_map, "presence": presence}
 
     @staticmethod
     def _normalize_depth(depth: torch.Tensor) -> torch.Tensor:
@@ -269,13 +269,14 @@ class JatanMTL(nn.Module):
         Structural defects (cracks, spalling, exposed rebars, etc.) carry weight 1.0;
         cosmetic defects (graffiti, weathering, etc.) carry weight 0.2.
 
-        score = Σ (weight × coverage_pct / 100), clamped to [0, 1]
+        score = Destroyed_pct × 2.0/100 + Damaged_pct × 0.5/100, clamped to [0, 1]
+        (25% Destroyed → 0.5 Sedang; 50% Destroyed → 1.0 Berat)
         """
-        total = sum(
-            (1.0 if cls in _BRIDGE_STRUCTURAL_CLASSES else 0.2) * coverage.get(cls, 0.0)
-            for cls in detected_classes
+        return min(
+            coverage.get("Destroyed", 0.0) * 2.0 / 100
+            + coverage.get("Damaged",   0.0) * 0.5 / 100,
+            1.0,
         )
-        return min(total / 100.0 * 5.0, 1.0)  # scale: 20% structural damage → severity 1.0
 
     @staticmethod
     def compute_bridge_passability(severity_score: float) -> str:
