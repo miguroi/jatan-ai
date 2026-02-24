@@ -156,8 +156,8 @@ def cmd_generate_annotations(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if args.domain == "bridge":
-        from src.vlm.annotation_generator import AnnotationGenerator
-        generator = AnnotationGenerator(
+        from src.vlm.annotation_generator import EIDSegAnnotationGenerator
+        generator = EIDSegAnnotationGenerator(
             data_root=args.data_root,
             output_path=args.output,
             api_key=args.api_key,
@@ -408,8 +408,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Generate VLM training annotations via vision API")
     p_ga.add_argument("--domain", choices=["bridge", "road"], default="bridge",
                       help="Domain to annotate: bridge (dacl10k) or road (RDD2022) (default: bridge)")
-    p_ga.add_argument("--data-root",     default="data/dacl10k",
-                      help="Data root — dacl10k for bridge, data/raw for road (default: data/dacl10k)")
+    p_ga.add_argument("--data-root",     default="data/raw/eidseg",
+                      help="Data root — data/raw/eidseg for bridge, data/raw for road (default: data/raw/eidseg)")
     p_ga.add_argument("--output",        default="data/vlm_annotations.jsonl",
                       help="Output JSONL path (default: data/vlm_annotations.jsonl)")
     p_ga.add_argument("--api-key",       default=None,
