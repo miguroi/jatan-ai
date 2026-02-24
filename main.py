@@ -296,7 +296,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
         severity_score = float(model.compute_bridge_severity(
             class_map.unsqueeze(0), depth_map.unsqueeze(0)
         )[0])
-        passability    = _PASSABILITY_MAP[model.compute_bridge_passability(severity_score)]
+        passability    = model.compute_bridge_passability(severity_score)
 
         all_severities.append(severity_score)
         all_passability.append(passability)
@@ -308,7 +308,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
                 "coverage": coverage,
             },
             "severity":    {"score": round(severity_score, 4), "label": _severity_label(severity_score)},
-            "passability": passability,
+            "passability": _PASSABILITY_MAP[passability],
         }
 
         if vlm is not None:
@@ -330,7 +330,7 @@ def cmd_infer(args: argparse.Namespace) -> None:
             "images":    per_image,
             "aggregate": {
                 "severity":    {"score": round(agg_severity_score, 4), "label": _severity_label(agg_severity_score)},
-                "passability": agg_passability,
+                "passability": _PASSABILITY_MAP[agg_passability],
             },
         }
     else:
