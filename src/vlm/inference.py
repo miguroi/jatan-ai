@@ -144,16 +144,19 @@ class BridgeVLMInference:
         return (
             "You are a field assessor conducting emergency post-disaster structural triage. "
             "Your report will be used by emergency response teams to make immediate "
-            "access and evacuation decisions. "
-            "Automated analysis detected the following bridge damage "
-            "(colour overlays indicate affected areas):\n\n"
+            "access and evacuation decisions.\n\n"
+            "Look at the image carefully. Colour overlays mark the detected damage zones: "
+            "orange = Damaged, red = Destroyed.\n\n"
+            "Automated analysis results:\n"
             f"{defect_summary}\n\n"
             f"Severity: {severity_label} ({severity_score:.2f}). "
             f"Passability: {passability}.\n\n"
-            "Write a 1-2 sentence triage report stating the immediate access status and action. "
-            "Use field-ready language "
-            "(e.g., 'do not cross', 'motorcycles only', 'proceed with caution', 'safe to cross'). "
-            "Be direct. Do not repeat the defect list verbatim."
+            "Based on what you see in the image and the analysis above, write a detailed triage report covering:\n"
+            "1. What the visible damage looks like and how extensive it is\n"
+            "2. Immediate safety risks for responders and civilians\n"
+            "3. Clear access recommendation with reasoning\n"
+            "4. Suggested next steps for the response team\n\n"
+            "Be thorough — 4 to 6 sentences."
         )
 
     # ------------------------------------------------------------------
