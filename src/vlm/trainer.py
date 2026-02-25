@@ -106,7 +106,7 @@ class VLMTrainer:
             save_total_limit=2,
             remove_unused_columns=False,  # required for multimodal
             logging_steps=10,
-            report_to="none",
+            report_to="wandb",
             dataset_kwargs={"skip_prepare_dataset": True},
         )
 
