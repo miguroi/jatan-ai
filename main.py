@@ -334,18 +334,18 @@ def cmd_infer(args: argparse.Namespace) -> None:
             vlm_result = vlm.describe(
                 img, class_map, severity_score, passability, coverage,
             )
-            entry["reasoning"] = {
-                "report":        vlm_result["report"],
-                "detected":      vlm_result["detected"],
-                "overlay_image": _pil_to_base64(vlm_result["overlay_image"]),
+            reasoning: dict = {
+                "report":   vlm_result["report"],
+                "detected": vlm_result["detected"],
             }
             if getattr(args, "save_overlay", None):
-                import os
                 os.makedirs(args.save_overlay, exist_ok=True)
                 stem = Path(image_path).stem
                 out_path = os.path.join(args.save_overlay, f"{stem}_overlay.png")
                 vlm_result["overlay_image"].save(out_path)
+                reasoning["overlay_image"] = out_path
                 logger.info("Overlay saved to {}", out_path)
+            entry["reasoning"] = reasoning
 
         per_image.append(entry)
 
