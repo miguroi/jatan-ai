@@ -78,7 +78,7 @@ _PASSABILITY_ALIASES: dict[str, str] = {
 
 def _normalise_passability(text: str) -> str | None:
     lower = text.lower()
-    for alias, canonical in _PASSABILITY_ALIASES.items():
+    for alias, canonical in sorted(_PASSABILITY_ALIASES.items(), key=lambda x: -len(x[0])):
         if alias in lower:
             return canonical
     return None
