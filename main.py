@@ -338,6 +338,13 @@ def cmd_infer(args: argparse.Namespace) -> None:
                 "detected":      vlm_result["detected"],
                 "overlay_image": _pil_to_base64(vlm_result["overlay_image"]),
             }
+            if getattr(args, "save_overlay", None):
+                import os
+                os.makedirs(args.save_overlay, exist_ok=True)
+                stem = Path(image_path).stem
+                out_path = os.path.join(args.save_overlay, f"{stem}_overlay.png")
+                vlm_result["overlay_image"].save(out_path)
+                logger.info("Overlay saved to {}", out_path)
 
         per_image.append(entry)
 
@@ -416,6 +423,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Path to LoRA adapter dir (e.g. checkpoints/vlm_lora/grpo/final_adapter)")
     p_in.add_argument("--max-new-tokens", type=int, default=256,
                       help="Max new tokens for VLM generation (default: 256)")
+    p_in.add_argument("--save-overlay", default=None, metavar="DIR",
+                      help="Save overlay image(s) to this directory as PNG")
     p_in.set_defaults(func=cmd_infer)
 
     # generate-annotations
