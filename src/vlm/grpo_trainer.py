@@ -5,7 +5,7 @@ Reward signals (all in [0, 1]):
   - passability_reward: predicted passability tier matches ground truth
   - grounding_reward:   fraction of ground-truth defect classes mentioned in <think>
 
-Total reward = format_reward * (0.4 * passability_reward + 0.6 * grounding_reward)
+Total reward = 0.2 * format_reward + 0.4 * passability_reward + 0.4 * grounding_reward
 
 Run with torchrun for multi-GPU:
   torchrun --nproc_per_node=3 -m src.vlm.grpo_trainer [args]
@@ -119,7 +119,7 @@ def combined_reward(completions: list[str], **kwargs) -> list[float]:
     pass_ = passability_reward(completions, **kwargs)
     grnd  = grounding_reward(completions, **kwargs)
     return [
-        f * (0.4 * p + 0.6 * g)
+        0.2 * f + 0.4 * p + 0.4 * g
         for f, p, g in zip(fmt, pass_, grnd)
     ]
 
