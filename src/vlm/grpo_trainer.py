@@ -229,18 +229,20 @@ class GRPOVLMTrainer:
         )
 
         if self.base_adapter:
-            logger.info("Loading CoT SFT adapter from {}", self.base_adapter)
-            model = PeftModel.from_pretrained(model, self.base_adapter, is_trainable=True)
-        else:
-            lora_config = LoraConfig(
-                task_type=TaskType.CAUSAL_LM,
-                r=16,
-                lora_alpha=32,
-                lora_dropout=0.05,
-                bias="none",
-                target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-            )
-            model = get_peft_model(model, lora_config)
+            logger.info("Merging SFT adapter from {} into base model...", self.base_adapter)
+            model = PeftModel.from_pretrained(model, self.base_adapter)
+            model = model.merge_and_unload()
+            logger.info("Adapter merged. Applying fresh LoRA for GRPO...")
+
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        )
+        model = get_peft_model(model, lora_config)
 
         model.print_trainable_parameters()
 
