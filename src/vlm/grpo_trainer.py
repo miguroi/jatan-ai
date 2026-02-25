@@ -214,7 +214,7 @@ class GRPOVLMTrainer:
 
     def run(self) -> None:
         import torch
-        from peft import LoraConfig, TaskType, get_peft_model
+        from peft import LoraConfig, TaskType
         from peft import PeftModel
         from transformers import AutoModelForImageTextToText, AutoProcessor
         from trl import GRPOConfig, GRPOTrainer
@@ -232,8 +232,10 @@ class GRPOVLMTrainer:
             logger.info("Merging SFT adapter from {} into base model...", self.base_adapter)
             model = PeftModel.from_pretrained(model, self.base_adapter)
             model = model.merge_and_unload()
-            logger.info("Adapter merged. Applying fresh LoRA for GRPO...")
+            logger.info("Adapter merged.")
 
+        # Pass LoRA config to GRPOTrainer — TRL wraps the model internally,
+        # avoiding the nested PeftModel / visual.dtype StopIteration crash.
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=16,
@@ -242,21 +244,17 @@ class GRPOVLMTrainer:
             bias="none",
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         )
-        model = get_peft_model(model, lora_config)
-
-        model.print_trainable_parameters()
 
         processor = AutoProcessor.from_pretrained(
             self.model_name, trust_remote_code=True
         )
 
         # ── Dataset ─────────────────────────────────────────────────────
-        full_ds = load_grpo_dataset(self.annotations_path)
-        n_val   = max(1, int(len(full_ds) * self.val_fraction))
+        full_ds  = load_grpo_dataset(self.annotations_path)
+        n_val    = max(1, int(len(full_ds) * self.val_fraction))
         train_ds = full_ds.select(range(len(full_ds) - n_val))
         eval_ds  = full_ds.select(range(len(full_ds) - n_val, len(full_ds)))
         logger.info("Train: {} | Eval: {}", len(train_ds), len(eval_ds))
-
 
         # ── GRPOConfig ───────────────────────────────────────────────────
         grpo_config = GRPOConfig(
@@ -279,6 +277,7 @@ class GRPOVLMTrainer:
         trainer = GRPOTrainer(
             model=model,
             args=grpo_config,
+            peft_config=lora_config,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             reward_funcs=[combined_reward],
@@ -289,7 +288,7 @@ class GRPOVLMTrainer:
         trainer.train()
 
         final_dir = os.path.join(self.output_dir, "final_adapter")
-        model.save_pretrained(final_dir)
+        trainer.model.save_pretrained(final_dir)
         processor.save_pretrained(final_dir)
         logger.success("GRPO training complete. Adapter saved to {}", final_dir)
 
