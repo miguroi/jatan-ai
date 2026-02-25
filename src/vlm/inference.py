@@ -156,7 +156,7 @@ class BridgeVLMInference:
             "2. Immediate safety risks for responders and civilians\n"
             "3. Clear access recommendation with reasoning\n"
             "4. Suggested next steps for the response team\n\n"
-            "Be thorough — 2 to 3 sentences."
+            "Be thorough — 1 to 2 sentences."
         )
 
     # ------------------------------------------------------------------
