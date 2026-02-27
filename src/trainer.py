@@ -268,6 +268,7 @@ class EIDSegBridgeTrainer:
         epochs1: int = 10,
         epochs2: int = 20,
         checkpoint_dir: str = "checkpoints",
+        checkpoint_name: str = "bridge_seg_best.pt",
         patience: int = 5,
         num_workers: int = min(4, os.cpu_count() or 1),
         resume_phase2: bool = False,
@@ -282,9 +283,13 @@ class EIDSegBridgeTrainer:
         self.patience     = patience
         self.num_workers  = num_workers
         self.resume_phase2 = resume_phase2
-        self.ckpt_path    = os.path.join(checkpoint_dir, "bridge_seg_best.pt")
+        self.ckpt_path    = os.path.join(checkpoint_dir, checkpoint_name)
         self._scaler      = torch.amp.GradScaler("cuda")
-        self._ce          = nn.CrossEntropyLoss(ignore_index=255)
+        self._focal_loss = FocalLoss(
+            gamma=2.0,
+            alpha=[1.0/0.18, 1.0/0.45, 1.0/0.37],
+            ignore_index=255,
+        )
         os.makedirs(checkpoint_dir, exist_ok=True)
 
     def run(self) -> None:
@@ -430,6 +435,7 @@ class BridgeSegTrainer:
         epochs1: int = 10,
         epochs2: int = 20,
         checkpoint_dir: str = "checkpoints",
+        checkpoint_name: str = "bridge_seg_best.pt",
         patience: int = 5,
         num_workers: int = min(4, os.cpu_count() or 1),
         resume_phase2: bool = False,
@@ -444,7 +450,7 @@ class BridgeSegTrainer:
         self.patience = patience
         self.num_workers = num_workers
         self.resume_phase2 = resume_phase2
-        self.ckpt_path = os.path.join(checkpoint_dir, "bridge_seg_best.pt")
+        self.ckpt_path = os.path.join(checkpoint_dir, checkpoint_name)
         self._scaler = torch.amp.GradScaler("cuda")
 
         # Focal Loss for class imbalance handling
