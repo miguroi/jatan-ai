@@ -3,6 +3,7 @@ import sys
 import os
 from pathlib import Path
 
+import wandb
 from loguru import logger
 
 
@@ -139,6 +140,15 @@ def cmd_eval(args: argparse.Namespace) -> None:
     val_loss = running_loss / len(val_loader)
     class_ious = [float(np.mean(iou)) if iou else 0.0 for iou in per_class_iou]
     miou = float(np.mean(class_ious))
+
+    # Log to WandB
+    wandb.init(project="jatan-ai", name=f"eval_{Path(args.checkpoint).stem}")
+    wandb.log({
+        "eval/val_loss": val_loss,
+        "eval/mIoU": miou,
+        **{f"eval/iou_{cls}": iou for cls, iou in zip(_BRIDGE_CLASSES, class_ious)}
+    })
+    wandb.finish()
 
     logger.info("Evaluation Results")
     logger.info("  val_loss:  {:.4f}", val_loss)
