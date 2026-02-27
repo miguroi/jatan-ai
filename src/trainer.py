@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.dataset import BridgeDataset, CombinedDamageDataset, EIDSegDataset, get_transform
+from src.model import FocalLoss
 
 
 def custom_collate_fn(batch):
@@ -446,6 +447,16 @@ class BridgeSegTrainer:
         self.ckpt_path = os.path.join(checkpoint_dir, "bridge_seg_best.pt")
         self._scaler = torch.amp.GradScaler("cuda")
 
+        # Focal Loss for class imbalance handling
+        # Class distribution from EIDSeg: Undamaged~18%, Damaged~45%, Destroyed~37%
+        # Inverse weights for better balance
+        class_weights = [1.0/0.18, 1.0/0.45, 1.0/0.37]  # ~[5.6, 2.2, 2.7]
+        self._focal_loss = FocalLoss(
+            gamma=2.0,
+            alpha=class_weights,
+            ignore_index=255,
+        )
+
         os.makedirs(checkpoint_dir, exist_ok=True)
 
     def run(self) -> None:
@@ -547,7 +558,7 @@ class BridgeSegTrainer:
             optimizer.zero_grad()
             with torch.amp.autocast("cuda"):
                 out = self.model.segment_bridge(images)
-                loss = F.binary_cross_entropy_with_logits(out["seg_logits"], masks)
+                loss = self._focal_loss(out["seg_logits"], masks)
             self._scaler.scale(loss).backward()
             self._scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(
@@ -577,7 +588,7 @@ class BridgeSegTrainer:
 
                 with torch.amp.autocast("cuda"):
                     out = self.model.segment_bridge(images)
-                    loss = F.binary_cross_entropy_with_logits(out["seg_logits"], masks)
+                    loss = self._focal_loss(out["seg_logits"], masks)
 
                 preds   = (out["probs"] > 0.5).float()
                 targets = masks
