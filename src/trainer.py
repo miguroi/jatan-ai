@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from loguru import logger
 from sklearn.metrics import f1_score
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -272,6 +273,7 @@ class EIDSegBridgeTrainer:
         patience: int = 5,
         num_workers: int = min(4, os.cpu_count() or 1),
         resume_phase2: bool = False,
+        run_name: Optional[str] = None,
     ) -> None:
         self.model        = model
         self.device       = device
@@ -283,6 +285,7 @@ class EIDSegBridgeTrainer:
         self.patience     = patience
         self.num_workers  = num_workers
         self.resume_phase2 = resume_phase2
+        self.run_name     = run_name or os.path.splitext(checkpoint_name)[0]
         self.ckpt_path    = os.path.join(checkpoint_dir, checkpoint_name)
         self._scaler      = torch.amp.GradScaler("cuda")
         self._focal_loss = FocalLoss(
@@ -293,6 +296,18 @@ class EIDSegBridgeTrainer:
         os.makedirs(checkpoint_dir, exist_ok=True)
 
     def run(self) -> None:
+        wandb.init(
+            project="jatan-ai",
+            name=self.run_name,
+            config={
+                "batch_size": self.batch_size,
+                "epochs1": self.epochs1,
+                "epochs2": self.epochs2,
+                "patience": self.patience,
+                "data_root": self.data_root,
+            },
+        )
+
         train_ds = EIDSegDataset(split="train", data_root=self.data_root)
         val_ds   = EIDSegDataset(split="val",   data_root=self.data_root)
 
@@ -320,7 +335,7 @@ class EIDSegBridgeTrainer:
                 self.model.bridge_seg_model.decode_head.parameters(), lr=1e-3
             )
             logger.info("EIDSegBridgeTrainer Phase 1: decode_head only")
-            self._train_phase(opt1, self.epochs1, patience=None)
+            self._train_phase(opt1, self.epochs1, patience=None, phase="phase1")
 
         self.model.unfreeze_bridge_seg_encoder()
         opt2 = torch.optim.AdamW([
@@ -328,12 +343,14 @@ class EIDSegBridgeTrainer:
             {"params": self.model.bridge_seg_model.decode_head.parameters(),  "lr": 1e-3},
         ])
         logger.info("EIDSegBridgeTrainer Phase 2: full fine-tune")
-        self._train_phase(opt2, self.epochs2, patience=self.patience)
+        self._train_phase(opt2, self.epochs2, patience=self.patience, phase="phase2")
+        wandb.finish()
 
-    def _train_phase(self, optimizer, epochs: int, patience: Optional[int]) -> None:
+    def _train_phase(self, optimizer, epochs: int, patience: Optional[int], phase: str = "phase1") -> None:
         scheduler       = CosineAnnealingLR(optimizer, T_max=epochs)
         best_val_loss   = float("inf")
         patience_counter = 0
+        global_epoch_offset = 0 if phase == "phase1" else self.epochs1
 
         for epoch in range(epochs):
             logger.info("Epoch {}/{}", epoch + 1, epochs)
@@ -344,6 +361,12 @@ class EIDSegBridgeTrainer:
                 "train_loss={:.4f} val_loss={:.4f} val_mIoU={:.4f}",
                 train_loss, val_loss, val_miou,
             )
+            wandb.log({
+                f"{phase}/train_loss": train_loss,
+                f"{phase}/val_loss":   val_loss,
+                f"{phase}/val_mIoU":   val_miou,
+                "epoch": global_epoch_offset + epoch + 1,
+            })
             if val_loss < best_val_loss:
                 best_val_loss    = val_loss
                 patience_counter = 0
