@@ -50,8 +50,10 @@ class FocalLoss(nn.Module):
         # Create mask for ignored indices
         valid_mask = targets != self.ignore_index  # [B, H, W]
 
-        # Get probability of target class for each pixel
-        targets_expanded = targets.unsqueeze(1)  # [B, 1, H, W]
+        # Clamp targets to valid class range before gather to avoid out-of-bounds
+        # (ignore_index pixels will be zeroed out later via valid_mask)
+        targets_clamped = targets.clamp(0, C - 1)
+        targets_expanded = targets_clamped.unsqueeze(1)  # [B, 1, H, W]
         p_t = probs.gather(1, targets_expanded).squeeze(1)  # [B, H, W]
 
         # Compute focal loss: FL = -(1 - p_t)^gamma * log(p_t)
@@ -65,8 +67,8 @@ class FocalLoss(nn.Module):
 
         # Apply class weights if provided
         if self.alpha_tensor is not None:
-            # Get class weight for each target pixel
-            class_weights = self.alpha_tensor.to(inputs.device)[targets]
+            # Get class weight for each target pixel (use clamped targets)
+            class_weights = self.alpha_tensor.to(inputs.device)[targets_clamped]
             focal_loss = focal_loss * class_weights  # [B, H, W]
 
         # Mask out ignored pixels
