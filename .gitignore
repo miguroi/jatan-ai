@@ -57,3 +57,6 @@ sample/
 dacl10k/
 docs/
 result/
+*.png 
+*.jpeg
+*.json

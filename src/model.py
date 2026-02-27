@@ -41,29 +41,39 @@ class FocalLoss(nn.Module):
         """
         B, C, H, W = inputs.shape
 
-        # Convert targets to one-hot
-        targets_one_hot = F.one_hot(targets, num_classes=C).permute(0, 3, 1, 2).float()
-        # targets_one_hot: [B, C, H, W]
-
         # Compute softmax probabilities
-        probs = F.softmax(inputs, dim=1)
+        probs = F.softmax(inputs, dim=1)  # [B, C, H, W]
+
+        # Compute log probabilities
+        log_probs = F.log_softmax(inputs, dim=1)  # [B, C, H, W]
 
         # Create mask for ignored indices
-        mask = targets != self.ignore_index  # [B, H, W]
+        valid_mask = targets != self.ignore_index  # [B, H, W]
+
+        # Get probability of target class for each pixel
+        targets_expanded = targets.unsqueeze(1)  # [B, 1, H, W]
+        p_t = probs.gather(1, targets_expanded).squeeze(1)  # [B, H, W]
+
+        # Compute focal loss: FL = -(1 - p_t)^gamma * log(p_t)
+        focal_weight = torch.pow(1 - p_t, self.gamma)  # [B, H, W]
+
+        # Gather log_probs for target class
+        log_p_t = log_probs.gather(1, targets_expanded).squeeze(1)  # [B, H, W]
 
         # Compute focal loss
-        ce = -targets_one_hot * torch.log(probs.clamp(min=1e-8))
-        weight = torch.pow(1 - probs, self.gamma)
-        focal = weight * ce
+        focal_loss = -focal_weight * log_p_t  # [B, H, W]
 
-        # Sum over classes, average over pixels
-        loss = focal.sum(dim=1)  # [B, H, W]
+        # Apply class weights if provided
+        if self.alpha_tensor is not None:
+            # Get class weight for each target pixel
+            class_weights = self.alpha_tensor.to(inputs.device)[targets]
+            focal_loss = focal_loss * class_weights  # [B, H, W]
 
-        # Apply ignore mask
-        loss = loss * mask
+        # Mask out ignored pixels
+        focal_loss = focal_loss * valid_mask.float()
 
         # Average over valid pixels
-        return loss.sum() / mask.sum().clamp(min=1)
+        return focal_loss.sum() / valid_mask.sum().clamp(min=1)
 
 _BRIDGE_SEG_PRETRAINED = "nvidia/mit-b2"
 _BRIDGE_SEG_CHECKPOINT = "checkpoints/bridge_seg_best.pt"
