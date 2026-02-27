@@ -252,6 +252,7 @@ def cmd_train_vlm_grpo(args: argparse.Namespace) -> None:
         learning_rate=args.lr,
         max_steps=args.max_steps,
         save_steps=args.save_steps,
+        resume_from_checkpoint=args.resume_from_checkpoint,
     )
     trainer.run()
 
@@ -500,6 +501,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_grpo.add_argument("--lr",                type=float, default=2e-6)
     p_grpo.add_argument("--max-steps",         type=int, default=200)
     p_grpo.add_argument("--save-steps",        type=int, default=10)
+    p_grpo.add_argument("--resume-from-checkpoint", default=None,
+                        help="Path to checkpoint directory to resume from (e.g., checkpoints/vlm_lora/grpo/checkpoint-500)")
     p_grpo.set_defaults(func=cmd_train_vlm_grpo)
 
     return parser
