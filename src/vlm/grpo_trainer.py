@@ -196,6 +196,7 @@ class GRPOVLMTrainer:
         max_steps: int = 200,
         save_steps: int = 10,
         val_fraction: float = 0.1,
+        resume_from_checkpoint: str | None = None,
     ) -> None:
         self.annotations_path      = annotations_path
         self.model_name            = model_name
@@ -210,6 +211,7 @@ class GRPOVLMTrainer:
         self.max_steps             = max_steps
         self.save_steps            = save_steps
         self.val_fraction          = val_fraction
+        self.resume_from_checkpoint = resume_from_checkpoint
         os.makedirs(output_dir, exist_ok=True)
 
     def run(self) -> None:
@@ -272,6 +274,7 @@ class GRPOVLMTrainer:
             max_steps=self.max_steps,
             report_to="wandb",
             remove_unused_columns=False,
+            resume_from_checkpoint=self.resume_from_checkpoint,
         )
 
         trainer = GRPOTrainer(
@@ -313,6 +316,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-steps",      type=int, default=200)
     p.add_argument("--save-steps",     type=int, default=10)
     p.add_argument("--val-fraction",   type=float, default=0.1)
+    p.add_argument("--resume-from-checkpoint", default=None,
+                   help="Path to checkpoint directory to resume from (e.g., checkpoints/vlm_lora/grpo/checkpoint-500)")
     return p
 
 
@@ -332,5 +337,6 @@ if __name__ == "__main__":
         max_steps=args.max_steps,
         save_steps=args.save_steps,
         val_fraction=args.val_fraction,
+        resume_from_checkpoint=args.resume_from_checkpoint,
     )
     trainer.run()

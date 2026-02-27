@@ -16,7 +16,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 from PIL import Image
 
@@ -89,3 +89,41 @@ async def infer(
     service = app.state.service
     result = service.run(pil_images, use_vlm=use_vlm, threshold=threshold)
     return JSONResponse(content=result)
+
+
+@app.post("/overlay")
+async def overlay(
+    images: list[UploadFile] = File(..., description="One or more images (JPEG/PNG)"),
+    threshold: float = Form(0.5, description="Detection confidence threshold (default: 0.5)"),
+    alpha: float = Form(0.4, description="Overlay transparency 0-1 (default: 0.4)"),
+):
+    """Generate segmentation overlay images.
+
+    Returns overlay images as a multi-part response with PNG images.
+    """
+    pil_images: list[Image.Image] = []
+    for upload in images:
+        raw = await upload.read()
+        try:
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Cannot decode image: {upload.filename}")
+        pil_images.append(img)
+
+    if not pil_images:
+        raise HTTPException(status_code=400, detail="No valid images provided.")
+
+    service = app.state.service
+    overlays = service.run_overlay(pil_images, threshold=threshold, alpha=alpha)
+
+    # Return as JSON with base64-encoded images for simplicity
+    import base64
+    return JSONResponse(content={
+        "images": [
+            {
+                "name": img.filename,
+                "overlay": f"data:image/png;base64,{base64.b64encode(ov).decode('utf-8')}"
+            }
+            for img, ov in zip(images, overlays)
+        ]
+    })
