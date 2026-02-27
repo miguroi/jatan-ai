@@ -4,6 +4,67 @@ import torch.nn.functional as F
 
 _DEPTH_PRETRAINED = "Intel/dpt-large"
 
+
+class FocalLoss(nn.Module):
+    """Focal Loss for multi-class segmentation.
+
+    Addresses class imbalance by down-weighting easy examples.
+    FL(p_t) = -(1 - p_t)^γ * log(p_t)
+
+    Paper: Lin et al. "Focal Loss for Dense Object Detection" (ICCV 2017)
+    """
+
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        alpha: list[float] | None = None,
+        ignore_index: int = 255,
+    ) -> None:
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.ignore_index = ignore_index
+
+        if alpha is not None:
+            self.register_buffer("alpha_tensor", torch.tensor(alpha, dtype=torch.float32))
+        else:
+            self.alpha_tensor = None
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            inputs:  [B, C, H, W] logits
+            targets: [B, H, W] class indices (0, 1, 2, or ignore_index)
+
+        Returns:
+            scalar loss
+        """
+        B, C, H, W = inputs.shape
+
+        # Convert targets to one-hot
+        targets_one_hot = F.one_hot(targets, num_classes=C).permute(0, 3, 1, 2).float()
+        # targets_one_hot: [B, C, H, W]
+
+        # Compute softmax probabilities
+        probs = F.softmax(inputs, dim=1)
+
+        # Create mask for ignored indices
+        mask = targets != self.ignore_index  # [B, H, W]
+
+        # Compute focal loss
+        ce = -targets_one_hot * torch.log(probs.clamp(min=1e-8))
+        weight = torch.pow(1 - probs, self.gamma)
+        focal = weight * ce
+
+        # Sum over classes, average over pixels
+        loss = focal.sum(dim=1)  # [B, H, W]
+
+        # Apply ignore mask
+        loss = loss * mask
+
+        # Average over valid pixels
+        return loss.sum() / mask.sum().clamp(min=1)
+
 _BRIDGE_SEG_PRETRAINED = "nvidia/mit-b2"
 _BRIDGE_SEG_CHECKPOINT = "checkpoints/bridge_seg_best.pt"
 _N_BRIDGE_SEG_CLASSES = 3
