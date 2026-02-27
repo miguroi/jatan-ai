@@ -339,8 +339,8 @@ class EIDSegBridgeTrainer:
 
         self.model.unfreeze_bridge_seg_encoder()
         opt2 = torch.optim.AdamW([
-            {"params": self.model.bridge_seg_model.segformer.parameters(),    "lr": 1e-4},
-            {"params": self.model.bridge_seg_model.decode_head.parameters(),  "lr": 1e-3},
+            {"params": self.model.bridge_seg_model.segformer.parameters(),    "lr": 5e-5},
+            {"params": self.model.bridge_seg_model.decode_head.parameters(),  "lr": 5e-4},
         ])
         logger.info("EIDSegBridgeTrainer Phase 2: full fine-tune")
         self._train_phase(opt2, self.epochs2, patience=self.patience, phase="phase2")
@@ -348,7 +348,7 @@ class EIDSegBridgeTrainer:
 
     def _train_phase(self, optimizer, epochs: int, patience: Optional[int], phase: str = "phase1") -> None:
         scheduler       = CosineAnnealingLR(optimizer, T_max=epochs)
-        best_val_loss   = float("inf")
+        best_miou       = 0.0
         patience_counter = 0
         global_epoch_offset = 0 if phase == "phase1" else self.epochs1
 
@@ -367,11 +367,11 @@ class EIDSegBridgeTrainer:
                 f"{phase}/val_mIoU":   val_miou,
                 "epoch": global_epoch_offset + epoch + 1,
             })
-            if val_loss < best_val_loss:
-                best_val_loss    = val_loss
+            if val_miou > best_miou:
+                best_miou        = val_miou
                 patience_counter = 0
                 torch.save(self.model.bridge_seg_model.state_dict(), self.ckpt_path)
-                logger.success("Saved checkpoint → {}", self.ckpt_path)
+                logger.success("Saved checkpoint → {} (mIoU={:.4f})", self.ckpt_path, val_miou)
             else:
                 patience_counter += 1
             if patience is not None and patience_counter >= patience:
