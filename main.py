@@ -88,6 +88,7 @@ def cmd_train(args: argparse.Namespace) -> None:
             epochs2=args.epochs2,
             checkpoint_name=args.checkpoint_name,
             resume_phase2=args.resume_phase2,
+            run_name=args.run_name,
         )
         trainer.run()
 
@@ -417,6 +418,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Output checkpoint filename (default: bridge_seg_best.pt)")
     p_tr.add_argument("--resume-phase2", action="store_true",
                       help="Skip Phase 1 and load checkpoints/bridge_seg_best.pt directly into Phase 2")
+    p_tr.add_argument("--run-name", default=None,
+                      help="WandB run name (default: checkpoint name without extension)")
     p_tr.set_defaults(func=cmd_train)
 
     # eval
