@@ -35,11 +35,15 @@ else
 fi
 
 # ── start uvicorn in background ────────────────────────────────────────────────
-echo "[1/2] Starting uvicorn on port $PORT..."
+LOG_FILE="logs/server.log"
+mkdir -p logs
+
+echo "[1/2] Starting uvicorn on port $PORT... (logs → $LOG_FILE)"
 uv run uvicorn src.api.app:app \
     --host 127.0.0.1 \
     --port "$PORT" \
-    --log-level info &
+    --log-level info \
+    2>&1 | tee -a "$LOG_FILE" &
 UVICORN_PID=$!
 
 # wait for uvicorn to be ready

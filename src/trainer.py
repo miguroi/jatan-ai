@@ -287,10 +287,10 @@ class EIDSegBridgeTrainer:
         self.resume_phase2 = resume_phase2
         self.run_name     = run_name or os.path.splitext(checkpoint_name)[0]
         self.ckpt_path    = os.path.join(checkpoint_dir, checkpoint_name)
-        self._scaler      = torch.amp.GradScaler("cuda")
+        self._scaler      = torch.amp.GradScaler("cuda", enabled=False)
         self._focal_loss = FocalLoss(
             gamma=2.0,
-            alpha=[1.0/0.18, 1.0/0.45, 1.0/0.37],
+            alpha=[1.0, 3.5, 5.5],  # Undamaged≈majority, Damaged≈moderate, Destroyed≈minority
             ignore_index=255,
         )
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -339,8 +339,8 @@ class EIDSegBridgeTrainer:
 
         self.model.unfreeze_bridge_seg_encoder()
         opt2 = torch.optim.AdamW([
-            {"params": self.model.bridge_seg_model.segformer.parameters(),    "lr": 5e-5},
-            {"params": self.model.bridge_seg_model.decode_head.parameters(),  "lr": 5e-4},
+            {"params": self.model.bridge_seg_model.segformer.parameters(),    "lr": 2e-5},
+            {"params": self.model.bridge_seg_model.decode_head.parameters(),  "lr": 2e-4},
         ])
         logger.info("EIDSegBridgeTrainer Phase 2: full fine-tune")
         self._train_phase(opt2, self.epochs2, patience=self.patience, phase="phase2")
@@ -388,16 +388,19 @@ class EIDSegBridgeTrainer:
             masks  = batch["mask"].to(self.device)    # [B, 512, 512] long
 
             optimizer.zero_grad()
-            with torch.amp.autocast("cuda"):
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 out  = self.model.segment_bridge(images)
-                loss = self._focal_loss(out["seg_logits"], masks)
-            self._scaler.scale(loss).backward()
-            self._scaler.unscale_(optimizer)
+                loss = self._focal_loss(out["seg_logits"].float(), masks)
+
+            if not torch.isfinite(loss):
+                logger.warning("NaN/Inf loss detected — skipping batch")
+                continue
+
+            loss.backward()
             nn.utils.clip_grad_norm_(
                 self.model.bridge_seg_model.parameters(), max_norm=1.0
             )
-            self._scaler.step(optimizer)
-            self._scaler.update()
+            optimizer.step()
 
             running_loss += loss.item()
             n_batches    += 1
@@ -414,9 +417,9 @@ class EIDSegBridgeTrainer:
             for batch in pbar:
                 images = batch["image"].to(self.device)
                 masks  = batch["mask"].to(self.device)
-                with torch.amp.autocast("cuda"):
+                with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                     out  = self.model.segment_bridge(images)
-                    loss = self._focal_loss(out["seg_logits"], masks)
+                loss = self._focal_loss(out["seg_logits"].float(), masks)
 
                 class_map = out["class_map"]  # [B, H, W]
                 valid     = masks != 255
