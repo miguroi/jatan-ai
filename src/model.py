@@ -194,7 +194,11 @@ class JatanMTL(nn.Module):
         return 0.1 + (depth - d_min) / (d_max - d_min + 1e-8) * 0.9
 
     @staticmethod
-    def compute_bridge_severity(class_map: torch.Tensor, depth_map: torch.Tensor) -> torch.Tensor:
+    def compute_bridge_severity(
+        class_map: torch.Tensor,
+        depth_map: torch.Tensor,
+        sky_fraction: float = 0.25,
+    ) -> torch.Tensor:
         """Depth-weighted bridge damage severity score.
 
         Follows the volume ratio algorithm:
@@ -202,20 +206,35 @@ class JatanMTL(nn.Module):
             denominator = Σ(Damaged×depth) + Σ(Destroyed×depth) + Σ(Undamaged×depth)
             score       = numerator / denominator, clamped to [0, 1]
 
-        Destroyed pixels contribute fully to numerator (impassable).
-        Damaged pixels are weighted by _DS_WEIGHT (0.65).
-        Undamaged pixels only appear in denominator (reduce severity).
+        Sky pixels are excluded via a vertical spatial mask (top sky_fraction rows)
+        and a depth percentile filter (top 10% deepest pixels = sky/background).
 
         Args:
-            class_map: [B, H, W] long — 0=Undamaged, 1=Damaged, 2=Destroyed
-            depth_map: [B, H, W] float — normalised depth in [0.1, 1.0]
+            class_map:    [B, H, W] long — 0=Undamaged, 1=Damaged, 2=Destroyed
+            depth_map:    [B, H, W] float — normalised depth in [0.1, 1.0]
+            sky_fraction: fraction of image height from top to exclude (default 0.25)
 
         Returns:
             [B] float severity scores in [0, 1]
         """
-        damaged_w   = (class_map == 1).float() * depth_map   # DS
-        destroyed_w = (class_map == 2).float() * depth_map   # Debris
-        undamaged_w = (class_map == 0).float() * depth_map   # US
+        B, H, W = class_map.shape[0], class_map.shape[1], class_map.shape[2]
+
+        # Spatial mask: exclude top sky_fraction rows (sky region)
+        spatial_mask = torch.ones((B, H, W), dtype=torch.float32, device=class_map.device)
+        sky_rows = int(H * sky_fraction)
+        spatial_mask[:, :sky_rows, :] = 0.0
+
+        # Depth mask: exclude top-10% deepest pixels (sky/far background)
+        flat = depth_map.view(B, -1)
+        depth_cutoff = flat.quantile(0.90, dim=1).view(B, 1, 1)
+        depth_mask = (depth_map < depth_cutoff).float()
+
+        # Combined mask: pixel must pass both spatial and depth filters
+        mask = spatial_mask * depth_mask
+
+        damaged_w   = (class_map == 1).float() * depth_map * mask
+        destroyed_w = (class_map == 2).float() * depth_map * mask
+        undamaged_w = (class_map == 0).float() * depth_map * mask
 
         numerator   = _DS_WEIGHT * damaged_w.sum(dim=(1, 2)) + destroyed_w.sum(dim=(1, 2))
         denominator = (damaged_w + destroyed_w + undamaged_w).sum(dim=(1, 2)).clamp(min=1e-8)
