@@ -81,3 +81,7 @@ Endpoints: `GET /health`, `POST /infer` (multipart images), `POST /overlay`
 
 Passability tiers: `possible` (Bisa) · `bike_only` (Roda-2) · `impossible` (Tidak Bisa)
 Aggregate uses worst-case across all images (safety-first).
+
+## Models
+The trained models can be accessed here:
+https://drive.google.com/drive/folders/1qSOkawg_yZti5R3nVl_M7Vyhwcj56Rd3?usp=drive_link
