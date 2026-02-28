@@ -3,6 +3,7 @@
 Post-disaster bridge and road damage assessment using segmentation + VLM reasoning.
 
 **Segmentation:** SegFormer-B5 (3-class: Undamaged / Damaged / Destroyed) + DPT-Large depth weighting
+
 **VLM:** Qwen3-VL-2B-Instruct with LoRA — trained via SFT and GRPO (RISE-R1)
 
 ## Installation
@@ -24,9 +25,6 @@ OPENROUTER_API_KEY=your_key      # required for generate-annotations
 ## CLI Commands
 
 ```bash
-# Download RDD2022 road dataset (bridge dataset auto-downloads on first train)
-uv run main.py download [--data-root data/raw]
-
 # Train bridge segmenter (EIDSeg, 3-class)
 uv run main.py train --task eidseg-bridge [--epochs1 10] [--epochs2 20]
 
@@ -37,7 +35,7 @@ uv run main.py eval [--checkpoint checkpoints/bridge_seg_best.pt]
 uv run main.py infer image.jpg [--checkpoint ...] [--with-reasoning --vlm-adapter ...]
 
 # Generate VLM training annotations via OpenRouter API
-uv run main.py generate-annotations --domain {bridge,road} [--cot] [--model ...]
+uv run main.py generate-annotations [--cot] [--model ...]
 
 # LoRA finetune Qwen3-VL-2B-Instruct on annotations
 uv run main.py train-vlm --annotations data/vlm_annotations.jsonl [--cot]
