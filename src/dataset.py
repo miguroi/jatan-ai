@@ -176,7 +176,7 @@ class EIDSegDataset(Dataset):
         "D_Building":   1,
         "D_Road":       1,
         "Debris":       2,
-        "Undesignated": 255,
+        "Undesignated": 0,
     }
 
     def __init__(

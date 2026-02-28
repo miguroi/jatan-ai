@@ -87,21 +87,38 @@ class InferenceService:
         per_image = []
         all_severities: list[float] = []
         all_passability: list[str] = []
+        all_outputs: list[dict] = []
 
         for img in images:
-            entry = self._run_bridge(img, use_vlm, threshold)
+            entry, raw_out = self._run_bridge(img, threshold)
             all_severities.append(entry["severity"]["score"])
             all_passability.append(entry["passability"])
             per_image.append(entry)
+            all_outputs.append({"img": img, "out": raw_out, "entry": entry})
 
         agg_severity = max(all_severities)
-        return {
-            "images": per_image,
-            "aggregate": {
-                "severity":    {"score": round(agg_severity, 4), "label": _severity_label(agg_severity)},
-                "passability": _aggregate_passability(all_passability),
-            },
+        agg_passability = _aggregate_passability(all_passability)
+
+        aggregate: dict = {
+            "severity":    {"score": round(agg_severity, 4), "label": _severity_label(agg_severity)},
+            "passability": agg_passability,
         }
+
+        if use_vlm and self._bridge_vlm is not None:
+            worst = max(all_outputs, key=lambda x: x["entry"]["severity"]["score"])
+            vlm_result = self._bridge_vlm.describe(
+                worst["img"],
+                worst["out"]["class_map"][0].cpu(),
+                agg_severity,
+                agg_passability,
+                worst["entry"]["seg"]["coverage"],
+            )
+            aggregate["reasoning"] = {
+                "report":   vlm_result["report"],
+                "detected": vlm_result["detected"],
+            }
+
+        return {"images": per_image, "aggregate": aggregate}
 
     def generate_overlay(
         self,
@@ -136,21 +153,21 @@ class InferenceService:
         result = img_array * (1 - alpha) + overlay * alpha
         return Image.fromarray(result.astype(np.uint8))
 
-    def _run_bridge(self, img: Image.Image, use_vlm: bool, threshold: float) -> dict:
+    def _run_bridge(self, img: Image.Image, threshold: float) -> tuple[dict, dict]:
         x = self._bridge_tfm(img).unsqueeze(0).to(self.device)
         with torch.no_grad():
             out = self.model.segment_bridge(x, with_depth=True)
 
+        class_map_cpu = out["class_map"][0].cpu()
         presence_mask = out["presence"][0].cpu()
-        probs_map     = out["probs"][0].cpu()
-        total_pixels  = probs_map.shape[1] * probs_map.shape[2]
+        total_pixels  = class_map_cpu.numel()
 
         detected_classes = [
             _BRIDGE_CLASSES[i] for i, p in enumerate(presence_mask.tolist())
             if p and _BRIDGE_CLASSES[i] != "Undamaged"
         ]
         coverage = {
-            _BRIDGE_CLASSES[i]: round(float((probs_map[i] > threshold).sum()) / total_pixels * 100, 2)
+            _BRIDGE_CLASSES[i]: round(float((class_map_cpu == i).sum()) / total_pixels * 100, 2)
             for i in range(len(_BRIDGE_CLASSES))
         }
 
@@ -168,16 +185,7 @@ class InferenceService:
             "passability": passability,
         }
 
-        if use_vlm and self._bridge_vlm is not None:
-            vlm_result = self._bridge_vlm.describe(
-                img, out["class_map"][0].cpu(), severity_score, passability, coverage,
-            )
-            entry["reasoning"] = {
-                "report":   vlm_result["report"],
-                "detected": vlm_result["detected"],
-            }
-
-        return entry
+        return entry, out
 
     def run_overlay(
         self,

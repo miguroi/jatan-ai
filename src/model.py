@@ -77,11 +77,11 @@ class FocalLoss(nn.Module):
         # Average over valid pixels
         return focal_loss.sum() / valid_mask.sum().clamp(min=1)
 
-_BRIDGE_SEG_PRETRAINED = "nvidia/mit-b2"
+_BRIDGE_SEG_PRETRAINED = "nvidia/mit-b5"
 _BRIDGE_SEG_CHECKPOINT = "checkpoints/bridge_seg_best.pt"
 _N_BRIDGE_SEG_CLASSES = 3
 
-_DS_WEIGHT = 0.65
+_DS_WEIGHT = 0.75
 
 _BRIDGE_PASSABILITY_BISA  = 0.3  # bridge: severity below this → all vehicles
 _BRIDGE_PASSABILITY_RODA2 = 0.6  # bridge: severity below this → motorcycles only
@@ -165,7 +165,7 @@ class JatanMTL(nn.Module):
             out.logits, size=(512, 512), mode="bilinear", align_corners=False
         )
         probs     = torch.softmax(seg_logits, dim=1)   # [B, 3, 512, 512]
-        class_map = probs.argmax(dim=1)               # [B, 512, 512]
+        _, class_map = probs.max(dim=1)               # [B, 512, 512] argmax
         presence  = torch.stack(
             [class_map == c for c in range(probs.shape[1])], dim=1
         ).any(dim=(2, 3))                             # [B, 3]
