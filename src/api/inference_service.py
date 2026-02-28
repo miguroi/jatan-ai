@@ -165,6 +165,7 @@ class InferenceService:
         detected_classes = [
             _BRIDGE_CLASSES[i] for i, p in enumerate(presence_mask.tolist())
             if p and _BRIDGE_CLASSES[i] != "Undamaged"
+            and (probs_map[i] > threshold).sum() / total_pixels > 0.05
         ]
         coverage = {
             _BRIDGE_CLASSES[i]: round(float((probs_map[i] > threshold).sum()) / total_pixels * 100, 2)
