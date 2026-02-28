@@ -158,16 +158,16 @@ class InferenceService:
         with torch.no_grad():
             out = self.model.segment_bridge(x, with_depth=True)
 
-        class_map_cpu = out["class_map"][0].cpu()
         presence_mask = out["presence"][0].cpu()
-        total_pixels  = class_map_cpu.numel()
+        probs_map     = out["probs"][0].cpu()
+        total_pixels  = probs_map.shape[1] * probs_map.shape[2]
 
         detected_classes = [
             _BRIDGE_CLASSES[i] for i, p in enumerate(presence_mask.tolist())
             if p and _BRIDGE_CLASSES[i] != "Undamaged"
         ]
         coverage = {
-            _BRIDGE_CLASSES[i]: round(float((class_map_cpu == i).sum()) / total_pixels * 100, 2)
+            _BRIDGE_CLASSES[i]: round(float((probs_map[i] > threshold).sum()) / total_pixels * 100, 2)
             for i in range(len(_BRIDGE_CLASSES))
         }
 

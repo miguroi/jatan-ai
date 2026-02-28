@@ -167,7 +167,7 @@ class JatanMTL(nn.Module):
         probs     = torch.softmax(seg_logits, dim=1)           # [B, 3, 512, 512]
         max_probs, class_map = probs.max(dim=1)               # [B, 512, 512]
         # Pixels below confidence threshold fall back to Undamaged to reduce false positives
-        class_map = torch.where(max_probs >= 0.4, class_map, torch.zeros_like(class_map))
+        class_map = torch.where(max_probs >= 0.5, class_map, torch.zeros_like(class_map))
         presence  = torch.stack(
             [class_map == c for c in range(probs.shape[1])], dim=1
         ).any(dim=(2, 3))                             # [B, 3]
