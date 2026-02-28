@@ -389,8 +389,8 @@ class EIDSegBridgeTrainer:
 
             optimizer.zero_grad()
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                out  = self.model.segment_bridge(images)
-                loss = self._focal_loss(out["seg_logits"].float(), masks)
+                out = self.model.segment_bridge(images)
+            loss = self._focal_loss(out["seg_logits"].float(), masks)
 
             if not torch.isfinite(loss):
                 logger.warning("NaN/Inf loss detected — skipping batch")
