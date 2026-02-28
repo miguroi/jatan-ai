@@ -2,7 +2,7 @@
 
 Models compared:
   1. Qwen2.5-VL-72B    (qwen/qwen2.5-vl-72b-instruct)
-  2. InternVL3-78B     (opengvlab/internvl3-78b)
+  2. GPT-4o            (openai/gpt-4o)
   3. Llama 3.2 90B     (meta-llama/llama-3.2-90b-vision-instruct)
 
 Output:
@@ -40,7 +40,7 @@ from src.vlm.annotation_generator import _build_eidseg_prompt
 
 MODELS = {
     "qwen2.5-vl-72b":    "qwen/qwen2.5-vl-72b-instruct",
-    "internvl3-78b":     "opengvlab/internvl3-78b",
+    "gpt-4o":            "openai/gpt-4o",
     "llama-3.2-90b":     "meta-llama/llama-3.2-90b-vision-instruct",
 }
 
