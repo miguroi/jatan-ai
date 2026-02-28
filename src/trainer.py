@@ -290,7 +290,7 @@ class EIDSegBridgeTrainer:
         self._scaler      = torch.amp.GradScaler("cuda", enabled=False)
         self._focal_loss = FocalLoss(
             gamma=2.0,
-            alpha=[1.0, 3.5, 5.5],  # Undamaged≈majority, Damaged≈moderate, Destroyed≈minority
+            alpha=[1.0, 2.0, 3.0],  # Softer weights — reduce false positive bias toward damage classes
             ignore_index=255,
         )
         os.makedirs(checkpoint_dir, exist_ok=True)
