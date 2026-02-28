@@ -21,6 +21,8 @@ done
 export JATAN_BRIDGE_CHECKPOINT="${JATAN_BRIDGE_CHECKPOINT:-checkpoints/bridge_seg_best.pt}"
 [ -n "$ADAPTER" ] && export JATAN_ADAPTER="$ADAPTER"
 [ -n "$DEVICE"  ] && export JATAN_DEVICE="$DEVICE"
+export HF_HUB_DISABLE_PROGRESS_BARS=1
+export TRANSFORMERS_VERBOSITY=error
 
 # ── check cloudflared (system install or local binary) ────────────────────────
 if command -v cloudflared &>/dev/null; then
