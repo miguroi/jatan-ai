@@ -75,10 +75,14 @@ def main() -> None:
         total = counts.sum()
         coverage = {_BRIDGE_CLASSES[i]: round(counts[i] / total * 100, 2) for i in range(len(_BRIDGE_CLASSES))}
 
+        # Collect original polygon labels from XML
+        orig_labels = sorted({p["label"] for p in sample["polygons"]})
+
         print(f"\nLabel {lbl} — {_BRIDGE_CLASSES[lbl]}")
-        print(f"  Index      : {idx}")
-        print(f"  Image path : {sample['image_path']}")
-        print(f"  Coverage   : {coverage}")
+        print(f"  Index         : {idx}")
+        print(f"  Image path    : {sample['image_path']}")
+        print(f"  Orig labels   : {orig_labels}")
+        print(f"  Coverage      : {coverage}")
 
 
 if __name__ == "__main__":
