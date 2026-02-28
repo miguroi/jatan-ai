@@ -125,6 +125,8 @@ def main() -> None:
     parser.add_argument("--request-delay", type=float, default=1.5, help="Delay between API calls (default: 1.5s)")
     args = parser.parse_args()
 
+    from dotenv import load_dotenv
+    load_dotenv()
     api_key = args.api_key or os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         logger.error("No API key. Set OPENROUTER_API_KEY or pass --api-key.")
