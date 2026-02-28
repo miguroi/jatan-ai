@@ -25,23 +25,26 @@ OPENROUTER_API_KEY=your_key      # required for generate-annotations
 ## CLI Commands
 
 ```bash
-# Train bridge segmenter (EIDSeg, 3-class)
-uv run main.py train --task eidseg-bridge [--epochs1 10] [--epochs2 20]
+# Train
+uv run main.py train --task eidseg-bridge --epochs1 10 --epochs2 20 --checkpoint-name bridge_seg_best.pt
 
-# Evaluate bridge segmenter on EIDSeg validation set
-uv run main.py eval [--checkpoint checkpoints/bridge_seg_best.pt]
+# Eval
+uv run main.py eval --checkpoint checkpoints/bridge_seg_best.pt
 
-# Inference (outputs JSON with severity + passability)
-uv run main.py infer image.jpg [--checkpoint ...] [--with-reasoning --vlm-adapter ...]
+# Infer (no VLM)
+uv run main.py infer sample/jembatan_rusak_2.jpg --checkpoint checkpoints/bridge_seg_best.pt
 
-# Generate VLM training annotations via OpenRouter API
-uv run main.py generate-annotations [--cot] [--model ...]
+# Infer (with VLM)
+uv run main.py infer sample/jembatan_rusak_2.jpg --checkpoint checkpoints/bridge_seg_best.pt --with-reasoning --vlm-adapter checkpoints/vlm_lora/grpo_eidseg_2/final_adapter
 
-# LoRA finetune Qwen3-VL-2B-Instruct on annotations
-uv run main.py train-vlm --annotations data/vlm_annotations.jsonl [--cot]
+# Generate annotations
+uv run main.py generate-annotations --cot --split train
 
-# GRPO reinforcement refinement (requires torchrun)
-torchrun --nproc_per_node=1 main.py train-vlm-grpo --annotations data/vlm_cot_annotations.jsonl
+# SFT
+uv run main.py train-vlm --annotations data/vlm_cot_annotations.jsonl --cot
+
+# GRPO
+torchrun --nproc_per_node=1 main.py train-vlm-grpo --annotations data/vlm_cot_annotations.jsonl --base-adapter checkpoints/vlm_lora/eidseg_cot/final_adapter
 ```
 
 ## API Server
@@ -83,5 +86,5 @@ Passability tiers: `possible` (Bisa) · `bike_only` (Roda-2) · `impossible` (Ti
 Aggregate uses worst-case across all images (safety-first).
 
 ## Models
-The trained models can be accessed here:
+The trained models and checkpoints can be accessed here:
 https://drive.google.com/drive/folders/1qSOkawg_yZti5R3nVl_M7Vyhwcj56Rd3?usp=drive_link
