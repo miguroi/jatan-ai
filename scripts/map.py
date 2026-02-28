@@ -69,13 +69,25 @@ def process_image(
     return seg_overlay, depth_img
 
 
+def get_random_dataset_images(data_root: str, split: str, n: int) -> list[str]:
+    """Pick n random image paths from the EIDSeg dataset."""
+    import random
+    from src.dataset import EIDSegDataset
+    ds = EIDSegDataset(split=split, data_root=data_root)
+    samples = random.sample(ds._samples, min(n, len(ds._samples)))
+    return [str(s["image_path"]) for s in samples]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate segmentation overlay and depth map images.")
-    parser.add_argument("images", nargs="+", help="Input image path(s)")
+    parser.add_argument("images", nargs="*", help="Input image path(s). Omit to sample from dataset.")
     parser.add_argument("--checkpoint", default="checkpoints/bridge_seg_best_focal_v2.pt")
     parser.add_argument("--output", default="output/maps", help="Output directory")
     parser.add_argument("--alpha", type=float, default=0.5, help="Overlay transparency 0–1 (default: 0.5)")
     parser.add_argument("--device", default=None, help="cuda / cpu (default: auto)")
+    parser.add_argument("--data-root", default="data/raw/eidseg", help="EIDSeg data root (used with --random)")
+    parser.add_argument("--split", default="val", choices=["train", "val"], help="Dataset split to sample from (default: val)")
+    parser.add_argument("--random", type=int, default=0, metavar="N", help="Sample N random images from the dataset")
     args = parser.parse_args()
 
     device = torch.device(
@@ -83,10 +95,18 @@ def main() -> None:
     )
     print(f"Device: {device}")
 
+    if args.random > 0:
+        image_paths = get_random_dataset_images(args.data_root, args.split, args.random)
+        print(f"Sampled {len(image_paths)} random image(s) from {args.split} split")
+    elif args.images:
+        image_paths = args.images
+    else:
+        parser.error("Provide image paths or use --random N to sample from the dataset.")
+
     os.makedirs(args.output, exist_ok=True)
     model = load_model(args.checkpoint, device)
 
-    for img_path in args.images:
+    for img_path in image_paths:
         stem = Path(img_path).stem
         print(f"Processing {img_path} ...")
 
@@ -101,7 +121,7 @@ def main() -> None:
         print(f"  Segmentation → {seg_path}")
         print(f"  Depth map    → {depth_path}")
 
-    print(f"\nDone. {len(args.images)} image(s) processed → {args.output}/")
+    print(f"\nDone. {len(image_paths)} image(s) processed → {args.output}/")
 
 
 if __name__ == "__main__":
