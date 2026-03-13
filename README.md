@@ -1,10 +1,59 @@
 # Jatan AI
 
-Post-disaster bridge and road damage assessment using segmentation + VLM reasoning.
+Bridge and road damage assessment is a critical bottleneck in post-disaster emergency response. Jatan AI automates severity triage and passability classification from field photos, enabling faster mobilization decisions for rescue teams.
 
-**Segmentation:** SegFormer-B5 (3-class: Undamaged / Damaged / Destroyed) + DPT-Large depth weighting
+**3rd Place — Hackvidia ITB 2026**
 
-**VLM:** Qwen3-VL-2B-Instruct with LoRA — trained via SFT and GRPO (RISE-R1)
+## Architecture
+
+```
+Field Photo
+  └─ SegFormer-B2 encoder → SegFormer-B5 decoder   # damage segmentation (3 classes)
+       + DPT-Large depth map                         # depth-weighted severity scoring
+  └─ Qwen3-VL-2B-Instruct + LoRA                   # natural language damage report
+       trained via SFT → GRPO (RISE-R1)             # format + passability + grounding rewards
+```
+
+Two-phase training: frozen encoder → full fine-tune with differential LR.
+
+## Results
+
+### Segmentation Model (SegFormer-B2 × EIDSeg)
+
+| Metric | Score |
+|--------|-------|
+| mIoU | 0.741 |
+| IoU — Damaged | 0.745 |
+| IoU — Destroyed | 0.794 |
+| IoU — Undamaged | 0.685 |
+| Val Loss | 0.322 |
+
+### VLM (Qwen3-VL-2B + LoRA, GRPO-refined)
+
+Trained via SFT then GRPO (RISE-R1) with three reward signals: output format, passability accuracy, and defect grounding (hallucination penalty). Formal benchmark pending.
+
+## Sample Output
+
+![Bridge damage overlay](overlay_jembatan_rusak_2.png)
+
+```
+severity_score  = 0.717   (Berat)
+passability     = impossible
+priority_score  = 0.788   (population: 1,200 — impact × urgency × feasibility)
+```
+
+```json
+{
+  "images": [{
+    "image": "sample/jembatan_rusak_2.jpg",
+    "seg": { "presence": ["Damaged", "Destroyed"], "coverage": { "Damaged": 0.41, "Destroyed": 0.31 } },
+    "severity": { "score": 0.717, "label": "Berat" },
+    "passability": "impossible",
+    "reasoning": { "report": "Bridge shows severe structural damage with visible cracking and exposed rebar. Crossing is not safe for any vehicle type.", "detected": ["spalling", "exposed_rebar", "crack"] }
+  }],
+  "aggregate": { "severity": { "score": 0.717, "label": "Berat" }, "passability": "impossible" }
+}
+```
 
 ## Installation
 
@@ -65,6 +114,8 @@ Endpoints: `GET /health`, `POST /infer` (multipart images), `POST /overlay`
 | `checkpoints/vlm_lora/final_adapter/` | LoRA SFT adapter |
 | `checkpoints/vlm_lora/grpo/final_adapter/` | GRPO-refined adapter |
 
+Download: [Google Drive](https://drive.google.com/drive/folders/1qSOkawg_yZti5R3nVl_M7Vyhwcj56Rd3?usp=drive_link)
+
 ## Output Format
 
 ```json
@@ -82,9 +133,12 @@ Endpoints: `GET /health`, `POST /infer` (multipart images), `POST /overlay`
 }
 ```
 
-Passability tiers: `possible` (Bisa) · `bike_only` (Roda-2) · `impossible` (Tidak Bisa)
-Aggregate uses worst-case across all images (safety-first).
+## Passability Tiers
 
-## Models
-The trained models and checkpoints can be accessed here:
-https://drive.google.com/drive/folders/1qSOkawg_yZti5R3nVl_M7Vyhwcj56Rd3?usp=drive_link
+| Tier | Label | Meaning |
+|------|-------|---------|
+| `possible` | Bisa | All vehicles |
+| `bike_only` | Roda-2 | Motorcycles only |
+| `impossible` | Tidak Bisa | Impassable |
+
+Aggregate uses worst-case across all images (safety-first).
